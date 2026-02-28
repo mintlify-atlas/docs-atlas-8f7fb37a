@@ -623,3 +623,139 @@ Typical configuration: 1 worker per 2-4 CPU cores.
 6. **Use WorkerProcessHandle for production**: Better isolation and fault tolerance
 
 7. **Monitor worker restarts**: Frequent restarts indicate underlying issues that need investigation
+
+## Internal API Endpoints
+
+The Template Worker exposes several HTTP endpoints for internal management and monitoring. These endpoints are secured with internal authentication and should only be accessible to trusted services.
+
+### Dispatch Event (Internal)
+
+Dispatch an event directly to a guild, bypassing the standard Web* event name restriction.
+
+**Endpoint:** `POST /i/dispatch-event/{guild_id}`
+
+```bash Internal Dispatch
+curl -X POST "http://localhost:60000/i/dispatch-event/123456789012345678" \
+  -H "Authorization: Internal YOUR_INTERNAL_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "CustomInternalEvent",
+    "data": {
+      "type": "Text",
+      "value": "Internal event data"
+    }
+  }'
+```
+
+<ParamField path="guild_id" type="string" required>
+  The Discord guild ID to dispatch the event to
+</ParamField>
+
+<ParamField body="name" type="string" required>
+  Event name (Web* prefix restriction does not apply)
+</ParamField>
+
+<ParamField body="data" type="KhronosValue" required>
+  Event data as a KhronosValue object
+</ParamField>
+
+<Note>
+  This endpoint is used by internal services and does not check if the bot is in the guild. It's designed for administrative operations and system integrations.
+</Note>
+
+### Get Thread Count
+
+Returns the number of active worker threads/processes.
+
+**Endpoint:** `GET /i/threads-count`
+
+```bash Get Thread Count
+curl -X GET "http://localhost:60000/i/threads-count" \
+  -H "Authorization: Internal YOUR_INTERNAL_TOKEN"
+```
+
+**Response:** Integer representing the number of active workers.
+
+```json
+8
+```
+
+<Info>
+  Useful for monitoring worker pool size and detecting if workers have crashed.
+</Info>
+
+### Check Guilds Existence
+
+Check which guilds from a given list exist in the bot's cache.
+
+**Endpoint:** `POST /i/guilds-exist`
+
+```bash Check Guilds
+curl -X POST "http://localhost:60000/i/guilds-exist" \
+  -H "Authorization: Internal YOUR_INTERNAL_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '["123456789012345678", "987654321098765432"]'
+```
+
+**Request Body:** Array of guild ID strings
+
+**Response:** Array of integers where 0 = guild not in cache, 1 = guild exists
+
+```json
+[1, 0]
+```
+
+This endpoint is used by Sandwich integration to quickly check bot presence across multiple guilds.
+
+### Kill Worker
+
+Forcefully kills a worker or the entire worker pool. **Use with extreme caution.**
+
+**Endpoint:** `POST /i/kill-worker`
+
+```bash Kill Worker
+curl -X POST "http://localhost:60000/i/kill-worker" \
+  -H "Authorization: Internal YOUR_INTERNAL_TOKEN"
+```
+
+<Warning>
+  This is a destructive operation intended for debugging and emergency situations. Killing a WorkerPool will terminate all workers in the pool.
+</Warning>
+
+When used with WorkerProcessHandle, workers will automatically restart after being killed. With WorkerThread, the threads are permanently stopped.
+
+## Internal API Authentication
+
+Internal endpoints require the `InternalEndpoint` extractor which validates:
+
+1. **Authorization header format**: Must be `Authorization: Internal {token}`
+2. **User ID extraction**: Token contains the user ID of the caller
+3. **Source verification**: Requests should only come from trusted internal services
+
+Implementation (src/api/extractors.rs):
+
+```rust
+pub struct InternalEndpoint {
+    pub user_id: String,
+}
+
+impl InternalEndpoint {
+    // Validates internal authentication
+    // Extracts user_id from the authorization token
+}
+```
+
+<Info>
+  The internal API is designed for service-to-service communication within the Anti-Raid infrastructure. It should not be exposed to the public internet.
+</Info>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Mesophyll Protocol" href="/api/mesophyll" icon="network-wired">
+    Learn about the WebSocket coordination layer
+  </Card>
+  <Card title="System API" href="/api/system" icon="chart-line">
+    Explore public monitoring endpoints
+  </Card>
+</CardGroup>

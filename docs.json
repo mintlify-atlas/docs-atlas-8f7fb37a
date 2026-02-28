@@ -63,7 +63,8 @@
               "api/authentication",
               "api/guilds",
               "api/events",
-              "api/sessions"
+              "api/sessions",
+              "api/system"
             ]
           },
           {

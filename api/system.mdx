@@ -1,0 +1,335 @@
+---
+title: System & Monitoring
+description: Bot state, configuration, statistics, and global key-value storage
+---
+
+The System API provides endpoints for monitoring bot health, retrieving configuration, accessing statistics, and managing global key-value storage.
+
+## Get Bot State
+
+Retrieve the current state of the bot, including registered commands.
+
+**Endpoint:** `GET /bot-state`
+
+```bash Get Bot State
+curl -X GET "https://splashtail-staging.antiraid.xyz/bot-state"
+```
+
+### Response
+
+<ResponseField name="commands" type="array">
+  Array of registered Discord commands with their configuration.
+  
+  <Expandable title="Command object">
+    <ResponseField name="name" type="string">
+      Command name
+    </ResponseField>
+    <ResponseField name="description" type="string">
+      Command description
+    </ResponseField>
+    <ResponseField name="type" type="integer">
+      Command type (1 = Slash Command, 2 = User Context Menu, 3 = Message Context Menu)
+    </ResponseField>
+    <ResponseField name="options" type="array">
+      Command options/parameters
+    </ResponseField>
+    <ResponseField name="contexts" type="array">
+      Installation contexts where the command is available
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseExample>
+```json Bot State Response
+{
+  "commands": [
+    {
+      "name": "help",
+      "description": "Get help with AntiRaid commands",
+      "type": 1,
+      "options": [],
+      "contexts": [0, 1]
+    }
+  ]
+}
+```
+</ResponseExample>
+
+<Info>
+  Bot state is cached and updated whenever commands are registered. This endpoint is public and does not require authentication.
+</Info>
+
+## Get API Configuration
+
+Retrieve the base API configuration, including server IDs and OAuth client information.
+
+**Endpoint:** `GET /config`
+
+```bash Get Configuration
+curl -X GET "https://splashtail-staging.antiraid.xyz/config"
+```
+
+### Response
+
+<ResponseField name="main_server" type="string">
+  The main Discord server (guild) ID for Anti-Raid
+</ResponseField>
+
+<ResponseField name="client_id" type="string">
+  The Discord OAuth2 client ID
+</ResponseField>
+
+<ResponseField name="support_server_invite" type="string">
+  Invite link to the support server
+</ResponseField>
+
+<ResponseExample>
+```json Configuration Response
+{
+  "main_server": "1234567890",
+  "client_id": "987654321",
+  "support_server_invite": "https://discord.gg/example"
+}
+```
+</ResponseExample>
+
+<Note>
+  This configuration is useful for client applications that need to know the Discord client ID for OAuth2 flows or want to direct users to the support server.
+</Note>
+
+## Get Bot Statistics
+
+Retrieve real-time statistics about the bot, including shard information, guild count, and user count.
+
+**Endpoint:** `GET /bot-stats`
+
+```bash Get Bot Stats
+curl -X GET "https://splashtail-staging.antiraid.xyz/bot-stats"
+```
+
+### Response
+
+<ResponseField name="shard_conns" type="object">
+  Map of shard IDs to shard connection information
+  
+  <Expandable title="Shard connection object">
+    <ResponseField name="status" type="string">
+      Connection status (e.g., "READY", "CONNECTING", "DISCONNECTED")
+    </ResponseField>
+    <ResponseField name="real_latency" type="number">
+      Real latency to Discord's gateway in milliseconds
+    </ResponseField>
+    <ResponseField name="guilds" type="integer">
+      Number of guilds on this shard
+    </ResponseField>
+    <ResponseField name="uptime" type="integer">
+      Shard uptime in seconds
+    </ResponseField>
+    <ResponseField name="total_uptime" type="integer">
+      Total uptime across all sessions in seconds
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="total_guilds" type="integer">
+  Total number of guilds across all shards
+</ResponseField>
+
+<ResponseField name="total_users" type="integer">
+  Total number of cached users
+</ResponseField>
+
+<ResponseExample>
+```json Bot Statistics Response
+{
+  "shard_conns": {
+    "0": {
+      "status": "READY",
+      "real_latency": 45.2,
+      "guilds": 150,
+      "uptime": 3600,
+      "total_uptime": 86400
+    },
+    "1": {
+      "status": "READY",
+      "real_latency": 52.1,
+      "guilds": 143,
+      "uptime": 3600,
+      "total_uptime": 86400
+    }
+  },
+  "total_guilds": 293,
+  "total_users": 15420
+}
+```
+</ResponseExample>
+
+<Info>
+  Statistics are cached for 100 seconds to reduce load on the system. Subsequent requests within this window will return cached data.
+</Info>
+
+## List Global Key-Value Pairs
+
+List global key-value pairs from the template shop or other global storage scopes. This is used for discovering available templates and other shared resources.
+
+**Endpoint:** `GET /global-kvs`
+
+```bash List Global KVs
+curl -X GET "https://splashtail-staging.antiraid.xyz/global-kvs?scope=template_shop&query=%" \
+  -H "Authorization: YOUR_TOKEN"
+```
+
+<ParamField query="scope" type="string" required>
+  The scope to filter by (e.g., "template_shop" for template shop listings)
+</ParamField>
+
+<ParamField query="query" type="string" default="%">
+  SQL LIKE pattern to filter keys. Use '%' for wildcards. Defaults to '%' which lists all keys.
+</ParamField>
+
+### Response
+
+<ResponseField name="items" type="array">
+  Array of partial global KV objects
+  
+  <Expandable title="Partial global KV object">
+    <ResponseField name="scope" type="string">
+      The scope of the KV entry
+    </ResponseField>
+    <ResponseField name="key" type="string">
+      The key identifier
+    </ResponseField>
+    <ResponseField name="version" type="integer">
+      Version number of this entry
+    </ResponseField>
+    <ResponseField name="created_at" type="string">
+      ISO 8601 timestamp of creation
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseExample>
+```json List Global KVs Response
+{
+  "items": [
+    {
+      "scope": "template_shop",
+      "key": "moderation-suite",
+      "version": 3,
+      "created_at": "2024-01-15T10:30:00Z"
+    },
+    {
+      "scope": "template_shop",
+      "key": "welcome-system",
+      "version": 1,
+      "created_at": "2024-01-20T14:22:00Z"
+    }
+  ]
+}
+```
+</ResponseExample>
+
+<Note>
+  Authentication is required for this endpoint. Use an OAuth2 session or API token.
+</Note>
+
+## Get Specific Global Key-Value
+
+Retrieve the full data for a specific global key-value entry, including its complete value and metadata.
+
+**Endpoint:** `GET /global-kvs/{scope}/{key}/{version}`
+
+```bash Get Global KV
+curl -X GET "https://splashtail-staging.antiraid.xyz/global-kvs/template_shop/moderation-suite/3" \
+  -H "Authorization: YOUR_TOKEN"
+```
+
+<ParamField path="scope" type="string" required>
+  The scope of the KV entry (e.g., "template_shop")
+</ParamField>
+
+<ParamField path="key" type="string" required>
+  The key identifier
+</ParamField>
+
+<ParamField path="version" type="integer" required>
+  The version number to retrieve
+</ParamField>
+
+### Response
+
+<ResponseField name="scope" type="string">
+  The scope of the KV entry
+</ResponseField>
+
+<ResponseField name="key" type="string">
+  The key identifier
+</ResponseField>
+
+<ResponseField name="version" type="integer">
+  Version number
+</ResponseField>
+
+<ResponseField name="value" type="object">
+  The stored value (structure depends on the use case)
+</ResponseField>
+
+<ResponseField name="created_at" type="string">
+  ISO 8601 timestamp of creation
+</ResponseField>
+
+<ResponseField name="updated_at" type="string">
+  ISO 8601 timestamp of last update
+</ResponseField>
+
+<ResponseExample>
+```json Get Global KV Response
+{
+  "scope": "template_shop",
+  "key": "moderation-suite",
+  "version": 3,
+  "value": {
+    "name": "Moderation Suite",
+    "description": "Complete moderation toolkit",
+    "author": "123456789",
+    "commands": ["ban", "kick", "mute"]
+  },
+  "created_at": "2024-01-15T10:30:00Z",
+  "updated_at": "2024-01-15T10:30:00Z"
+}
+```
+</ResponseExample>
+
+## Use Cases
+
+<CardGroup cols={2}>
+  <Card title="Health Monitoring" icon="heart-pulse">
+    Use `/bot-stats` to monitor bot health, shard status, and detect connectivity issues
+  </Card>
+  <Card title="Template Discovery" icon="magnifying-glass">
+    List and retrieve template shop entries using the global KV endpoints
+  </Card>
+  <Card title="Client Configuration" icon="gear">
+    Use `/config` to get OAuth2 client ID and support server links for your application
+  </Card>
+  <Card title="Command Registry" icon="list">
+    Query `/bot-state` to see all registered commands and their configuration
+  </Card>
+</CardGroup>
+
+## Rate Limiting
+
+All system endpoints respect standard API rate limits. Statistics endpoints have additional caching:
+- `/bot-stats` - 100 second cache
+- `/bot-state` - Cached indefinitely, updated on command registration
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Authentication" href="/api/authentication" icon="key">
+    Learn how to authenticate API requests
+  </Card>
+  <Card title="Internal API" href="/api/worker-communication" icon="server">
+    Explore internal monitoring and management endpoints
+  </Card>
+</CardGroup>
