@@ -1,0 +1,89 @@
+{
+  "projectType": "infrastructure",
+  "projectName": "Template Worker",
+  "projectDescription": "Process that handles dispatching templates and runs expiry tasks for Anti-Raid",
+  "theme": "aspen",
+  "primaryColor": "#7C3AED",
+  "lightColor": null,
+  "darkColor": null,
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": ["introduction", "quickstart"]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/worker-system",
+              "architecture/mesophyll",
+              "architecture/components"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/setup",
+              "configuration/environment",
+              "configuration/database"
+            ]
+          },
+          {
+            "group": "Deployment",
+            "pages": [
+              "deployment/docker",
+              "deployment/systemd",
+              "deployment/scaling"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Public API",
+            "pages": [
+              "api/authentication",
+              "api/guilds",
+              "api/events",
+              "api/sessions"
+            ]
+          },
+          {
+            "group": "Internal API",
+            "pages": [
+              "api/mesophyll",
+              "api/worker-communication"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Multi-topology worker pools (thread-based and process-based)",
+    "Mesophyll coordination layer for inter-worker communication",
+    "Luau VM management for template execution",
+    "HTTP/WebSocket APIs with OpenAPI specs",
+    "Database state management and migrations",
+    "Event dispatching and key expiry system",
+    "Fauxpas shell for debugging and testing"
+  ],
+  "publicApiSurface": [
+    "GET /guilds/{guild_id}/events - Dispatch event to guild",
+    "GET /guilds/{guild_id}/info - Get guild user info",
+    "POST /auth/authorize - Create user session",
+    "DELETE /auth/sessions/{session_id} - Delete session",
+    "GET /auth/sessions - List user sessions",
+    "GET /global-kv - List global key-value pairs",
+    "Worker pool types: ProcessPool, ThreadPool, ProcessPoolWorker",
+    "Worker modes: register, migrate, shell, processpool, threadpool",
+    "Mesophyll WebSocket coordination protocol",
+    "WorkerLike trait for custom worker implementations"
+  ]
+}
