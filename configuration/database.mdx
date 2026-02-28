@@ -1,0 +1,359 @@
+---
+title: Database Configuration
+description: PostgreSQL setup, migrations, and connection pooling for Template Worker
+---
+
+## PostgreSQL Requirements
+
+Template Worker requires PostgreSQL 12 or later with the following features:
+
+- Support for JSONB data types
+- Support for timestamps with time zones
+- UUID extension support
+
+## Connection Configuration
+
+The PostgreSQL connection URL is configured in `config.yaml`:
+
+```yaml
+meta:
+  postgres_url: "postgresql://user:password@host:port/database"
+```
+
+### Connection URL Format
+
+```
+postgresql://[user[:password]@][host][:port][/database][?parameters]
+```
+
+<ParamField path="user" type="string" required>
+  PostgreSQL username
+</ParamField>
+
+<ParamField path="password" type="string" required>
+  PostgreSQL password
+</ParamField>
+
+<ParamField path="host" type="string" default="localhost">
+  PostgreSQL server hostname or IP address
+</ParamField>
+
+<ParamField path="port" type="number" default="5432">
+  PostgreSQL server port
+</ParamField>
+
+<ParamField path="database" type="string" required>
+  Database name
+</ParamField>
+
+### Connection Examples
+
+```yaml
+# Local development
+postgres_url: "postgresql://antiraid:password@localhost/antiraid"
+
+# Docker internal network
+postgres_url: "postgresql://antiraid:password@postgres:5432/antiraid"
+
+# Production with SSL
+postgres_url: "postgresql://user:pass@prod-db.example.com/antiraid?sslmode=require"
+
+# With connection pool parameters
+postgres_url: "postgresql://user:pass@host/db?application_name=template-worker"
+```
+
+## Connection Pooling
+
+Template Worker uses SQLx's connection pooling with configurable pool sizes.
+
+### Pool Configuration
+
+<ParamField path="--max-db-connections" type="u32" default="7">
+  Maximum number of connections in the pool
+  
+  Set via command-line argument. See [Environment Variables](/configuration/environment#database-configuration) for details.
+</ParamField>
+
+### Pool Behavior
+
+- Connections are created lazily as needed
+- Idle connections are maintained for reuse
+- Failed connections trigger automatic reconnection
+- Each worker process (in process pool mode) maintains its own connection pool
+
+### Pool Sizing Guidelines
+
+**Process Pool Mode** (recommended for production):
+
+```bash
+# With 4 worker processes and 7 connections each:
+# Total connections = 4 workers × 7 = 28 connections
+./template-worker \
+  --worker-type processpool \
+  --process-workers 4 \
+  --max-db-connections 7
+```
+
+**Thread Pool Mode**:
+
+```bash
+# Single process with 10 connections total
+./template-worker \
+  --worker-type threadpool \
+  --max-db-connections 10
+```
+
+**PostgreSQL Configuration**:
+
+Ensure your PostgreSQL `max_connections` setting is sufficient:
+
+```sql
+-- Check current setting
+SHOW max_connections;
+
+-- Set in postgresql.conf
+max_connections = 100
+```
+
+## Database Migrations
+
+Template Worker includes an automatic migration system that tracks and applies schema changes.
+
+### Migration System
+
+Migrations are:
+- Stored in `src/migrations/` directory
+- Applied automatically on first startup
+- Tracked in the `_migrations_applied` table
+- Applied in a specific order to maintain dependencies
+
+### Current Migrations
+
+The following migrations are included:
+
+1. **khronosvalue_v2**: Updates Khronos value storage format
+2. **kv_generic**: Creates generic key-value storage tables
+3. **tenantstate**: Adds tenant state management tables
+4. **cleanup_v8**: Removes legacy V8 runtime data
+5. **drop_tenant_kv_expires_at**: Removes deprecated expiry column
+
+### Applying Migrations
+
+**Automatic (on startup)**:
+
+Migrations are applied automatically when Template Worker starts with any worker type except `register`.
+
+**Manual (using migrate command)**:
+
+```bash
+./template-worker --worker-type migrate
+```
+
+This will:
+1. Connect to the database
+2. Create the `_migrations_applied` table if needed
+3. Check which migrations have been applied
+4. Apply pending migrations in order
+5. Record successful migrations
+6. Exit
+
+### Migration Table Schema
+
+The migration tracking table is automatically created:
+
+```sql
+CREATE TABLE IF NOT EXISTS _migrations_applied (
+    id TEXT PRIMARY KEY,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+```
+
+### Migration Status
+
+Check which migrations have been applied:
+
+```sql
+SELECT id, applied_at 
+FROM _migrations_applied 
+ORDER BY applied_at;
+```
+
+## Database Schema
+
+Template Worker creates and manages several key tables:
+
+### Tenant State
+
+Stores Discord guild (tenant) configuration and state:
+
+```sql
+-- Core tenant state table
+-- Stores guild-specific configuration
+```
+
+### Key-Value Storage
+
+Generic key-value storage for template data:
+
+```sql
+-- Persistent key-value pairs
+-- Used by templates for data storage
+```
+
+### Migration Tracking
+
+Tracks applied database migrations:
+
+```sql
+-- Migration history
+SELECT * FROM _migrations_applied;
+```
+
+## Docker Setup
+
+When using the provided `docker-compose.yml`, PostgreSQL is configured automatically:
+
+```yaml
+postgres:
+  container_name: postgres
+  build:
+    context: ./deploy/docker/postgres
+  volumes:
+    - ./deploy/docker/state/postgres:/var/lib/postgresql/data
+  healthcheck:
+    test: ["CMD", "pg_isready", "-U", "antiraid"]
+    interval: 3s
+    timeout: 10s
+    retries: 3
+```
+
+### Database Persistence
+
+Data is persisted in `./deploy/docker/state/postgres/` on the host machine.
+
+### Health Checks
+
+The database container includes health checks that Template Worker waits for:
+
+```yaml
+template-worker:
+  depends_on:
+    postgres:
+      condition: service_healthy
+```
+
+## Database Operations
+
+### Backup
+
+```bash
+# Using pg_dump
+pg_dump -h localhost -U antiraid antiraid > backup.sql
+
+# Docker environment
+docker exec postgres pg_dump -U antiraid antiraid > backup.sql
+```
+
+### Restore
+
+```bash
+# Using psql
+psql -h localhost -U antiraid antiraid < backup.sql
+
+# Docker environment
+docker exec -i postgres psql -U antiraid antiraid < backup.sql
+```
+
+### Reset Database
+
+```bash
+# Drop and recreate (development only!)
+dropdb -h localhost -U antiraid antiraid
+createdb -h localhost -U antiraid antiraid
+
+# Run migrations
+./template-worker --worker-type migrate
+```
+
+## Monitoring and Troubleshooting
+
+### Connection Issues
+
+If Template Worker fails to connect:
+
+1. **Verify PostgreSQL is running**:
+   ```bash
+   pg_isready -h localhost -U antiraid
+   ```
+
+2. **Check connection URL**:
+   ```bash
+   # Test connection with psql
+   psql postgresql://user:password@host/database
+   ```
+
+3. **Review logs**:
+   ```bash
+   RUST_LOG=sqlx=debug ./template-worker
+   ```
+
+4. **Check firewall and network**:
+   ```bash
+   telnet host 5432
+   ```
+
+### Migration Failures
+
+If a migration fails:
+
+1. **Check migration status**:
+   ```sql
+   SELECT * FROM _migrations_applied;
+   ```
+
+2. **Review error logs** from the migrate command
+
+3. **Manual intervention** may be required - migrations are not automatically rolled back
+
+4. **Do not modify migration order** - migrations have dependencies
+
+### Performance Monitoring
+
+```sql
+-- Active connections
+SELECT count(*) FROM pg_stat_activity 
+WHERE application_name = 'template-worker';
+
+-- Long-running queries
+SELECT pid, now() - query_start as duration, query 
+FROM pg_stat_activity 
+WHERE state = 'active' 
+AND now() - query_start > interval '1 minute';
+
+-- Connection pool exhaustion
+SELECT count(*), state 
+FROM pg_stat_activity 
+GROUP BY state;
+```
+
+## Production Best Practices
+
+1. **Connection Limits**: Calculate total connections needed:
+   ```
+   Total = (worker_processes × max_db_connections) + overhead
+   ```
+
+2. **Connection Pooling**: Use external poolers like PgBouncer for very large deployments
+
+3. **SSL/TLS**: Enable SSL for production databases:
+   ```
+   postgres_url: "postgresql://user:pass@host/db?sslmode=require"
+   ```
+
+4. **Monitoring**: Set up PostgreSQL monitoring (pg_stat_statements, logging)
+
+5. **Backups**: Implement automated backup strategy with point-in-time recovery
+
+6. **High Availability**: Consider PostgreSQL replication or managed services
+
+7. **Resource Limits**: Set appropriate `shared_buffers`, `work_mem`, and `max_connections` in PostgreSQL

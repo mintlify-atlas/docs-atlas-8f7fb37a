@@ -1,0 +1,311 @@
+---
+title: Sessions
+description: Manage user authentication sessions and API tokens
+---
+
+The Sessions API provides endpoints to manage your authentication sessions, including creating API tokens, listing active sessions, and revoking access.
+
+## Get Current Session
+
+Retrieve information about your currently authenticated session.
+
+**Endpoint:** `GET /sessions/@me`
+
+```bash Get Session Info
+curl -X GET https://splashtail-staging.antiraid.xyz/sessions/@me \
+  -H "Authorization: YOUR_TOKEN"
+```
+
+<ResponseExample>
+```json Session Response
+{
+  "user_id": "123456789012345678",
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "state": "normal",
+  "type": "api"
+}
+```
+</ResponseExample>
+
+<ResponseField name="user_id" type="string">
+  The Discord user ID associated with this session
+</ResponseField>
+
+<ResponseField name="id" type="string">
+  The unique session identifier (UUID)
+</ResponseField>
+
+<ResponseField name="state" type="string">
+  The user's account state. Possible values:
+  - `normal` - Account is in good standing
+  - `banned` - Account is banned from using the API
+</ResponseField>
+
+<ResponseField name="type" type="string">
+  The session type. Possible values:
+  - `login` - Standard OAuth2 web login (1 hour expiry)
+  - `app_login` - Application login with PKCE (14 days expiry)
+  - `api` - API token with custom expiry
+</ResponseField>
+
+## List User Sessions
+
+Retrieve a list of all active sessions for the authenticated user.
+
+**Endpoint:** `GET /sessions`
+
+```bash List Sessions
+curl -X GET https://splashtail-staging.antiraid.xyz/sessions \
+  -H "Authorization: YOUR_TOKEN"
+```
+
+<ResponseExample>
+```json Sessions List
+{
+  "sessions": [
+    {
+      "id": "550e8400-e29b-41d4-a716-446655440000",
+      "name": "Production API Token",
+      "user_id": "123456789012345678",
+      "created_at": "2026-02-01T10:00:00Z",
+      "type": "api",
+      "expiry": "2026-03-01T10:00:00Z"
+    },
+    {
+      "id": "660e8400-e29b-41d4-a716-446655440001",
+      "name": null,
+      "user_id": "123456789012345678",
+      "created_at": "2026-02-28T08:30:00Z",
+      "type": "login",
+      "expiry": "2026-02-28T09:30:00Z"
+    }
+  ]
+}
+```
+</ResponseExample>
+
+<ResponseField name="sessions" type="array">
+  Array of active session objects
+  
+  <Expandable title="session properties">
+    <ResponseField name="id" type="string">
+      The unique session identifier (UUID)
+    </ResponseField>
+    
+    <ResponseField name="name" type="string | null">
+      The session name (only set for API tokens, null for login sessions)
+    </ResponseField>
+    
+    <ResponseField name="user_id" type="string">
+      The Discord user ID who owns this session
+    </ResponseField>
+    
+    <ResponseField name="created_at" type="string">
+      ISO 8601 timestamp when the session was created
+    </ResponseField>
+    
+    <ResponseField name="type" type="string">
+      The session type ("login", "app_login", or "api")
+    </ResponseField>
+    
+    <ResponseField name="expiry" type="string">
+      ISO 8601 timestamp when the session expires
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<Note>
+  Session tokens are **never** returned in list responses for security reasons. Tokens are only provided when creating a new session.
+</Note>
+
+## Create API Token
+
+Create a new API token for programmatic access.
+
+**Endpoint:** `POST /sessions`
+
+```bash Create API Token
+curl -X POST https://splashtail-staging.antiraid.xyz/sessions \
+  -H "Authorization: YOUR_EXISTING_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "CI/CD Pipeline Token",
+    "type": "api",
+    "expiry": 2592000
+  }'
+```
+
+<ParamField body="name" type="string" required>
+  A descriptive name for the API token (helps identify tokens when managing multiple sessions)
+</ParamField>
+
+<ParamField body="type" type="string" required>
+  Must be `"api"`. Only API tokens can be created via this endpoint.
+</ParamField>
+
+<ParamField body="expiry" type="integer" required>
+  Token expiry time in seconds from now. Must be between 0 and 9223372036854775 (approximately 292 million years).
+  
+  Common values:
+  - 3600 = 1 hour
+  - 86400 = 1 day
+  - 604800 = 1 week
+  - 2592000 = 30 days
+  - 31536000 = 1 year
+</ParamField>
+
+<ResponseExample>
+```json Created Token
+{
+  "user_id": "123456789012345678",
+  "token": "your_new_api_token_here_128_characters_long",
+  "session_id": "770e8400-e29b-41d4-a716-446655440002",
+  "expiry": "2026-03-30T12:00:00Z",
+  "user": null
+}
+```
+</ResponseExample>
+
+<ResponseField name="user_id" type="string">
+  The Discord user ID
+</ResponseField>
+
+<ResponseField name="token" type="string">
+  The newly created API token. **Save this immediately - it won't be shown again!**
+</ResponseField>
+
+<ResponseField name="session_id" type="string">
+  The unique identifier for this session
+</ResponseField>
+
+<ResponseField name="expiry" type="string">
+  ISO 8601 timestamp when the token expires
+</ResponseField>
+
+<ResponseField name="user" type="null">
+  Always null for API token creation (user info is only returned for OAuth2 logins)
+</ResponseField>
+
+<Warning>
+  The token is only returned once during creation. Make sure to save it securely. If you lose the token, you'll need to delete the session and create a new one.
+</Warning>
+
+## Delete Session
+
+Revoke a session by deleting it. This is useful for logging out or removing compromised tokens.
+
+**Endpoint:** `DELETE /sessions/{session_id}`
+
+```bash Delete Session
+curl -X DELETE https://splashtail-staging.antiraid.xyz/sessions/550e8400-e29b-41d4-a716-446655440000 \
+  -H "Authorization: YOUR_TOKEN"
+```
+
+<ParamField path="session_id" type="string" required>
+  The UUID of the session to delete. You can only delete sessions that belong to your user.
+</ParamField>
+
+<ResponseExample>
+```bash Success
+HTTP/1.1 204 No Content
+```
+
+```json Error - Not Found
+{
+  "message": "No session found to delete",
+  "code": "InternalError"
+}
+```
+</ResponseExample>
+
+<Note>
+  - A successful deletion returns HTTP 204 (No Content) with an empty response body
+  - You can only delete your own sessions
+  - Deleted sessions are immediately invalidated and cannot be used for further API requests
+</Note>
+
+## Session Management Best Practices
+
+<Tip>
+  **Security Tips:**
+  
+  - Create separate API tokens for different applications or environments
+  - Use descriptive names to identify tokens easily
+  - Set appropriate expiry times based on your use case
+  - Regularly audit and remove unused sessions
+  - Immediately delete tokens if they may have been compromised
+  - Never commit tokens to version control or share them publicly
+  - Use environment variables or secure vaults to store tokens
+</Tip>
+
+### Session Lifecycle
+
+1. **Create** - Generate a new session via OAuth2 or API token creation
+2. **Use** - Include the token in the `Authorization` header for all requests
+3. **Monitor** - Periodically list sessions to audit active access
+4. **Expire** - Sessions automatically expire based on their type or custom expiry
+5. **Delete** - Manually revoke sessions that are no longer needed
+
+### Expiry Times by Session Type
+
+| Session Type | Default Expiry | Configurable |
+|--------------|----------------|-------------|
+| login | 1 hour | No |
+| app_login | 14 days | No |
+| api | Custom | Yes (at creation) |
+
+## Error Handling
+
+<ResponseExample>
+```json Invalid Session Type
+{
+  "message": "Only 'api' session type is allowed",
+  "code": "Restricted"
+}
+```
+
+```json Invalid Expiry
+{
+  "message": "Expiry time must be between 0 and 9223372036854775",
+  "code": "InvalidToken"
+}
+```
+
+```json Invalid Session ID
+{
+  "message": "Failed to delete user session: Invalid session ID format",
+  "code": "InternalError"
+}
+```
+</ResponseExample>
+
+## Use Cases
+
+### Rotate API Tokens
+
+```bash Token Rotation
+# 1. Create new token
+curl -X POST https://splashtail-staging.antiraid.xyz/sessions \
+  -H "Authorization: OLD_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "New Token", "type": "api", "expiry": 2592000}'
+
+# 2. Update your application to use the new token
+# (deploy your application with the new token)
+
+# 3. Delete the old token
+curl -X DELETE https://splashtail-staging.antiraid.xyz/sessions/OLD_SESSION_ID \
+  -H "Authorization: NEW_TOKEN"
+```
+
+### Audit Active Sessions
+
+```bash Session Audit
+# List all sessions
+curl -X GET https://splashtail-staging.antiraid.xyz/sessions \
+  -H "Authorization: YOUR_TOKEN"
+
+# Review the list and delete any unknown or unused sessions
+curl -X DELETE https://splashtail-staging.antiraid.xyz/sessions/SUSPICIOUS_SESSION_ID \
+  -H "Authorization: YOUR_TOKEN"
+```

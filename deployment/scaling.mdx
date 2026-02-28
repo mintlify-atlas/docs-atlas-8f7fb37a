@@ -1,0 +1,551 @@
+---
+title: Scaling and Performance
+description: Configure worker pools, optimize performance, and scale Template Worker for production workloads
+---
+
+## Overview
+
+Template Worker provides multiple execution models to handle Discord events at scale. Understanding worker types, pool sizing, and performance characteristics is critical for production deployments.
+
+## Worker Types
+
+Template Worker supports three primary worker types, each with different performance and isolation characteristics.
+
+### Process Pool (Recommended)
+
+**Usage:**
+```bash
+template-worker --worker-type processpool
+```
+
+**Architecture:**
+- Spawns separate processes for each worker
+- Uses Mesophyll IPC for master-worker communication
+- Each worker is a full process with isolated memory
+- Workers are automatically restarted on failure
+
+**Advantages:**
+- **Isolation**: Process crashes don't affect other workers
+- **Security**: Memory isolation between workers
+- **Stability**: Failed workers auto-restart independently
+- **Scalability**: Better resource distribution across cores
+
+**Disadvantages:**
+- Higher memory overhead (separate process per worker)
+- Slightly higher IPC latency vs threads
+
+**Configuration:**
+```bash
+# Auto-detect worker count based on shard count
+template-worker --worker-type processpool
+
+# Explicit worker count
+template-worker --worker-type processpool --process-workers 8
+
+# Master tokio thread pool size
+template-worker --worker-type processpool --tokio-threads-master 10
+```
+
+### Thread Pool
+
+**Usage:**
+```bash
+template-worker --worker-type threadpool
+```
+
+**Architecture:**
+- Workers run as threads in a single process
+- Shared memory space between workers
+- Direct function calls instead of IPC
+
+**Advantages:**
+- Lower memory footprint
+- Faster inter-worker communication
+- Simpler debugging (single process)
+
+**Disadvantages:**
+- No isolation: worker crash can bring down entire process
+- Shared memory can cause contention
+- Harder to debug memory issues
+
+**Configuration:**
+```bash
+# Use thread pool with custom master thread count
+template-worker --worker-type threadpool --tokio-threads-master 15
+```
+
+### Comparison Table
+
+| Feature | Process Pool | Thread Pool |
+|---------|-------------|-------------|
+| Isolation | ✅ Full process isolation | ❌ Shared memory |
+| Memory Usage | Higher (~50-100MB per worker) | Lower (~10-20MB per worker) |
+| Crash Recovery | ✅ Auto-restart per worker | ❌ Entire process dies |
+| Communication | IPC (Mesophyll) | Direct function calls |
+| Latency | ~1-2ms IPC overhead | ~0.1ms direct call |
+| Debugging | Harder (multiple processes) | Easier (single process) |
+| Production Ready | ✅ Recommended | ⚠️ Use with caution |
+
+## Worker Pool Sizing
+
+Template Worker uses Discord's sharding formula to distribute servers across workers:
+
+```
+worker_id = (guild_id >> 22) % num_workers
+```
+
+### Automatic Sizing
+
+By default, worker count matches Discord shard count:
+
+```rust
+// From src/main.rs
+let shards = sandwich.get_shard_count().await?;
+let worker_pool = WorkerPool::<WorkerProcessHandle>::new(shards, &opts)?;
+```
+
+This ensures optimal distribution of Discord events across workers.
+
+### Manual Sizing
+
+Override worker count for specific hardware:
+
+```bash
+# 4 workers regardless of shard count
+template-worker --worker-type processpool --process-workers 4
+```
+
+### Sizing Recommendations
+
+| Bot Size | Guilds | Recommended Workers | CPU Cores | Memory |
+|----------|--------|-------------------|-----------|--------|
+| Small | < 1,000 | 2-4 | 2-4 | 2-4 GB |
+| Medium | 1,000-10,000 | 4-8 | 4-8 | 4-8 GB |
+| Large | 10,000-50,000 | 8-16 | 8-16 | 8-16 GB |
+| Very Large | > 50,000 | 16+ | 16+ | 16+ GB |
+
+<Warning>
+Each worker spawns its own Luau VM instances, consuming memory proportional to active guilds. Monitor memory usage when scaling.
+</Warning>
+
+## Tokio Thread Configuration
+
+Template Worker uses separate Tokio runtimes for master and worker processes.
+
+### Master Threads
+
+Handles HTTP API, database connections, and worker coordination:
+
+```bash
+template-worker --tokio-threads-master 10
+```
+
+**Default:** 10 threads
+
+**Recommendations:**
+- **Low traffic**: 4-8 threads
+- **Medium traffic**: 8-12 threads
+- **High traffic**: 12-20 threads
+
+### Worker Threads
+
+Handles event processing within each worker process:
+
+```bash
+template-worker --tokio-threads-worker 3
+```
+
+**Default:** 3 threads per worker
+
+**Recommendations:**
+- **CPU-bound scripts**: 2-4 threads (avoid oversubscription)
+- **I/O-bound scripts**: 4-8 threads (more parallelism)
+- **Mixed workloads**: 3-6 threads
+
+### Thread Pool Sizing Formula
+
+```
+Total Threads = (num_workers × tokio_threads_worker) + tokio_threads_master
+```
+
+**Example:**
+```bash
+# 8 workers × 3 threads + 10 master threads = 34 total threads
+template-worker --worker-type processpool \
+  --process-workers 8 \
+  --tokio-threads-worker 3 \
+  --tokio-threads-master 10
+```
+
+Ensure total threads don't exceed 2× CPU core count to avoid context switching overhead.
+
+## Database Connection Pooling
+
+Configure database connection limits per worker:
+
+```bash
+template-worker --max-db-connections 7
+```
+
+**Default:** 7 connections
+
+### Connection Pool Sizing
+
+```
+Total DB Connections = num_workers × max_db_connections
+```
+
+**Example:**
+- 8 workers × 7 connections = 56 total database connections
+
+Ensure your PostgreSQL `max_connections` setting can handle this:
+
+```sql
+-- In postgresql.conf
+max_connections = 100  # Must be > total worker connections
+```
+
+### Recommendations
+
+| Workload | Connections per Worker |
+|----------|----------------------|
+| Low database usage | 3-5 |
+| Medium database usage | 5-10 |
+| High database usage | 10-15 |
+
+## Process Pool Architecture
+
+The process pool model uses a master-worker architecture with inter-process communication.
+
+### Master Process
+
+```rust
+// From src/main.rs:331-367
+WorkerType::ProcessPool => {
+    let mesophyll_server = MesophyllServer::new(
+        CONFIG.addrs.mesophyll_server.clone(),
+        shards,
+        pg_pool.clone()
+    ).await?;
+    
+    let worker_pool = WorkerPool::<WorkerProcessHandle>::new(
+        shards,
+        &WorkerProcessHandleCreateOpts::new(mesophyll_server),
+    )?;
+    
+    // HTTP API server
+    let rpc_server = api::server::create(data, db_state, pg_pool, http);
+    let listener = TcpListener::bind(&CONFIG.addrs.template_worker).await?;
+    axum::serve(listener, rpc_server).await?;
+}
+```
+
+**Responsibilities:**
+- HTTP API (port 60000)
+- Worker process lifecycle management
+- Mesophyll IPC server
+- Database state coordination
+
+### Worker Process
+
+```rust
+// From src/main.rs:428-490
+WorkerType::ProcessPoolWorker => {
+    let worker_id = args.worker_id.expect("Worker ID required");
+    let ident_token = env::var("MESOPHYLL_CLIENT_TOKEN")?;
+    
+    let worker_thread = WorkerThread::new(worker_state, worker_id)?;
+    let meso_client = MesophyllClient::new(
+        CONFIG.addrs.mesophyll_server.clone(),
+        ident_token,
+        worker_thread.clone()
+    );
+    
+    // Connect to Discord and process events
+    client.start_shard(worker_id, process_workers).await?;
+}
+```
+
+**Responsibilities:**
+- Discord gateway connection (specific shard)
+- Luau VM execution
+- Event processing
+- Mesophyll IPC client
+
+### Worker Spawn Logic
+
+```rust
+// From src/worker/workerprocesshandle.rs:86-96
+let mut command = Command::new(current_exe);
+command.arg("--worker-type").arg("processpoolworker");
+command.arg("--worker-id").arg(id.to_string());
+command.arg("--process-workers").arg(total.to_string());
+command.env("MESOPHYLL_CLIENT_TOKEN", meso_token);
+command.kill_on_drop(true);
+
+let mut child = command.spawn()?;
+```
+
+Workers are spawned as child processes with:
+- Unique worker ID
+- Total worker count for sharding
+- Authentication token for Mesophyll
+- Auto-kill on master exit
+
+### Automatic Restart
+
+```rust
+// From src/worker/workerprocesshandle.rs:53-136
+loop {
+    // Spawn worker process
+    let mut child = command.spawn()?;
+    
+    tokio::select! {
+        resp = child.wait() => {
+            log::warn!("Worker {} exited, restarting...", id);
+            // Exponential backoff on repeated failures
+        }
+        _ = kill_msg_rx.recv() => {
+            child.kill().await?;
+            return; // Graceful shutdown
+        }
+    }
+}
+```
+
+Workers automatically restart with:
+- Exponential backoff (3s × min(failures, 5))
+- Max 10 consecutive failures before master abort
+- Graceful shutdown on SIGTERM/SIGINT
+
+## Performance Monitoring
+
+### Worker-Specific Logging
+
+Worker processes log with their ID prefix:
+
+```rust
+// From src/main.rs:132-141
+env_builder.format(move |buf, record| {
+    writeln!(
+        buf,
+        "[Worker {}] ({}) {} - {}",
+        worker_id,
+        record.target(),
+        record.level(),
+        record.args()
+    )
+});
+```
+
+Example output:
+```
+[Worker 0] (template-worker) INFO - Processing guild event
+[Worker 1] (template-worker) INFO - Executing script: moderation
+[Worker 2] (template-worker) WARN - Script timeout exceeded
+```
+
+### Debug Logging
+
+Enable Luau script debugging:
+
+```bash
+template-worker --worker-debug
+```
+
+Enables verbose logging of:
+- Script execution times
+- VM state changes
+- Event dispatching
+- Memory allocation
+
+<Warning>
+Debug logging significantly increases CPU usage and log volume. Only use in development or when actively debugging issues.
+</Warning>
+
+### Tokio Console
+
+For advanced async runtime debugging:
+
+```bash
+template-worker --use-tokio-console
+```
+
+Enables [tokio-console](https://github.com/tokio-rs/console) for:
+- Task execution visualization
+- Async runtime metrics
+- Deadlock detection
+- Resource tracking
+
+Connect with:
+```bash
+tokio-console http://localhost:6669
+```
+
+## Resource Limits
+
+### Docker Resource Limits
+
+In `docker-compose.yml`:
+
+```yaml
+template-worker:
+  deploy:
+    resources:
+      limits:
+        cpus: '4.0'
+        memory: 8G
+      reservations:
+        cpus: '2.0'
+        memory: 4G
+```
+
+### Systemd Resource Limits
+
+In systemd unit file:
+
+```ini
+[Service]
+MemoryMax=8G
+MemoryHigh=6G
+CPUQuota=400%
+TasksMax=1024
+LimitNOFILE=65536
+LimitNPROC=512
+```
+
+### Kernel Limits
+
+For high-scale deployments, adjust system limits:
+
+```bash
+# /etc/sysctl.conf
+fs.file-max = 100000
+net.core.somaxconn = 1024
+net.ipv4.ip_local_port_range = 1024 65535
+```
+
+Apply changes:
+```bash
+sudo sysctl -p
+```
+
+## Performance Tuning
+
+### CPU Optimization
+
+1. **Pin processes to cores** (systemd):
+   ```ini
+   [Service]
+   CPUAffinity=0-7
+   ```
+
+2. **Disable CPU frequency scaling**:
+   ```bash
+   sudo cpupower frequency-set -g performance
+   ```
+
+3. **Use process pools** for better core utilization
+
+### Memory Optimization
+
+1. **Tune Luau VM memory limits** in worker code
+2. **Use process pools** to isolate memory leaks
+3. **Monitor per-worker memory** via `/proc/{pid}/status`
+
+### Network Optimization
+
+1. **Increase socket buffer sizes**:
+   ```bash
+   # /etc/sysctl.conf
+   net.core.rmem_max = 16777216
+   net.core.wmem_max = 16777216
+   ```
+
+2. **Enable TCP fast open**:
+   ```bash
+   net.ipv4.tcp_fastopen = 3
+   ```
+
+3. **Tune connection backlog**:
+   ```bash
+   net.core.somaxconn = 4096
+   ```
+
+## Scaling Strategies
+
+### Vertical Scaling
+
+**When to scale up:**
+- Worker CPU usage consistently > 70%
+- Memory pressure causing swapping
+- Database connection pool exhaustion
+
+**How to scale:**
+1. Increase CPU cores
+2. Add more RAM
+3. Increase worker count proportionally
+4. Tune thread pool sizes
+
+### Horizontal Scaling
+
+<Warning>
+Template Worker doesn't natively support multi-instance deployments. Discord bots must maintain a single connection per shard.
+</Warning>
+
+**Alternative architectures:**
+- Run separate bot instances for different guilds
+- Use Discord's guild sharding for very large bots (75k+ guilds)
+- Implement custom load balancing at the gateway level
+
+## Benchmarking
+
+Profile your deployment to identify bottlenecks:
+
+### CPU Profiling
+
+```bash
+# Install perf
+sudo apt install linux-perf
+
+# Profile worker process
+sudo perf record -F 99 -p $(pgrep -f "worker-id 0") -g -- sleep 30
+sudo perf report
+```
+
+### Memory Profiling
+
+```bash
+# Install valgrind
+sudo apt install valgrind
+
+# Profile memory usage
+valgrind --tool=massif --massif-out-file=massif.out \
+  template-worker --worker-type threadpool
+
+# Visualize results
+ms_print massif.out
+```
+
+### Load Testing
+
+Simulate Discord events to test throughput:
+
+```bash
+# Send test events to worker
+curl -X POST http://localhost:60000/test/event \
+  -H "Content-Type: application/json" \
+  -d '{"type":"MESSAGE_CREATE","guild_id":"123"}'
+```
+
+Measure:
+- Events processed per second
+- p95/p99 latency
+- Memory growth over time
+- CPU utilization distribution
+
+## Next Steps
+
+- Review [Docker deployment](/deployment/docker) for containerized scaling
+- Configure [systemd](/deployment/systemd) for production process management
+- Explore [Architecture](/architecture/overview) to understand the system internals

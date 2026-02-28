@@ -1,0 +1,266 @@
+---
+title: Docker Deployment
+description: Deploy Template Worker using Docker and Docker Compose
+---
+
+## Overview
+
+Template Worker includes Docker support for containerized deployments. This guide covers building Docker images, using Docker Compose, and configuring the container environment.
+
+## Dockerfile
+
+The project includes a multi-stage Dockerfile for building optimized production images:
+
+```dockerfile
+# syntax=docker/dockerfile:1
+
+FROM rust:1.92-bookworm
+
+RUN apt update
+RUN apt install -y clang lld
+
+WORKDIR /app
+
+# Copy source code
+COPY luau/ ./luau/
+COPY src/ ./src/
+COPY Cargo.toml Cargo.lock ./
+COPY .cargo/ ./.cargo/
+
+# Build with cache mounts for faster rebuilds
+RUN  --mount=type=cache,target=/root/.cargo/git \
+    --mount=type=cache,target=/root/.cargo/registry \
+    --mount=type=cache,target=/app/target \
+    SQLX_OFFLINE=true cargo build --release && \
+    cp target/release/template-worker /app/template-worker
+
+EXPOSE 60000
+
+CMD [ "/app/template-worker" ]
+```
+
+### Key Features
+
+- **Build Caching**: Uses Docker build cache mounts for faster rebuilds
+- **Offline SQLx**: Compiles with `SQLX_OFFLINE=true` to avoid database dependency during build
+- **Port 60000**: Default HTTP API port for health checks and RPC
+
+## Building the Image
+
+<Steps>
+
+<Step title="Build the Docker image">
+
+```bash
+docker build -t template-worker:latest .
+```
+
+This creates a Docker image tagged `template-worker:latest`.
+
+</Step>
+
+<Step title="Verify the image">
+
+```bash
+docker images | grep template-worker
+```
+
+You should see your newly built image in the output.
+
+</Step>
+
+</Steps>
+
+## Docker Compose Setup
+
+Template Worker includes a comprehensive `docker-compose.yml` that orchestrates the entire stack including dependencies.
+
+### Full Stack Architecture
+
+The compose file defines a multi-service architecture:
+
+- **template-worker**: The main worker service
+- **postgres**: PostgreSQL database
+- **sandwich**: Discord gateway proxy
+- **nirn_proxy**: Discord REST API proxy with rate limiting
+- **seaweed**: Object storage (SeaweedFS)
+- **api_exposer**: Nginx reverse proxy
+
+### Template Worker Service
+
+```yaml
+template-worker:
+  container_name: template-worker
+  networks:
+    - antiraid_internal
+  depends_on:
+    sandwich:
+      condition: service_healthy
+    postgres:
+      condition: service_healthy
+  build:
+    context: .
+    dockerfile: ./Dockerfile
+  volumes:
+    - ./config.docker.yaml:/app/config.yaml:ro
+  environment:
+    RUST_LOG: "template-worker=info"
+  healthcheck:
+    test: [ "CMD", "curl", "-X", "POST", "-f", "http://localhost:60000/healthcheck" ]
+    interval: 3s
+    timeout: 10s
+    retries: 100
+  labels:
+    type: "service"
+```
+
+### Network Configuration
+
+The compose file uses three networks for security isolation:
+
+```yaml
+networks:
+  antiraid_infra:
+    name: antiraid_infra
+    driver: bridge
+    internal: false  # External access for proxies
+  antiraid_internal:
+    name: antiraid_internal
+    driver: bridge
+    internal: true   # No external access for services
+  antiraid_seaweed:
+    name: antiraid_seaweed
+    driver: bridge
+    internal: true   # Isolated storage network
+```
+
+## Running with Docker Compose
+
+<Steps>
+
+<Step title="Create configuration file">
+
+Create a `config.docker.yaml` file in your project root. See [Configuration](/configuration/setup) for details.
+
+```yaml
+discord_auth:
+  token: "your-bot-token"
+  client_id: 123456789
+  # ... other config
+
+meta:
+  postgres_url: "postgresql://antiraid@postgres/antiraid"
+  proxy: "http://nirn_proxy:3221"
+  sandwich_http_api: "http://sandwich:29334"
+  # ... other config
+```
+
+</Step>
+
+<Step title="Start the stack">
+
+```bash
+docker-compose up -d
+```
+
+This starts all services in the background.
+
+</Step>
+
+<Step title="View logs">
+
+```bash
+# All services
+docker-compose logs -f
+
+# Just template-worker
+docker-compose logs -f template-worker
+```
+
+</Step>
+
+<Step title="Check health status">
+
+```bash
+docker-compose ps
+```
+
+All services should show as "healthy" once fully started.
+
+</Step>
+
+</Steps>
+
+## Container Configuration
+
+### Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|----------|
+| `RUST_LOG` | Logging level (e.g., `template-worker=info`) | `info` |
+| `MESOPHYLL_CLIENT_TOKEN` | Token for process pool workers (internal use) | Auto-generated |
+
+### Volume Mounts
+
+- **Config**: Mount `config.yaml` as read-only at `/app/config.yaml`
+- **Data**: Persistent data is stored in named volumes (postgres, seaweed)
+
+### Port Mappings
+
+The default compose setup exposes these ports to the host:
+
+| Port | Service | Purpose |
+|------|---------|----------|
+| 5600 | api_exposer | HTTP API access |
+| 5601 | api_exposer | SeaweedFS access |
+| 29334 | sandwich | Gateway API (testing) |
+| 3222 | nirn_proxy | REST proxy (testing) |
+| 3931 | sandwich | Prometheus metrics |
+
+## Health Checks
+
+The template-worker service includes a health check endpoint:
+
+```bash
+curl -X POST http://localhost:60000/healthcheck
+```
+
+Docker uses this endpoint to monitor container health:
+
+- **Interval**: 3 seconds
+- **Timeout**: 10 seconds
+- **Retries**: 100 (to allow for slow startup)
+
+## Troubleshooting
+
+### Worker Won't Start
+
+1. Check dependency health:
+   ```bash
+   docker-compose ps
+   ```
+
+2. Verify postgres and sandwich are healthy before worker starts
+
+3. Check logs:
+   ```bash
+   docker-compose logs template-worker
+   ```
+
+### Connection Issues
+
+- Ensure `config.yaml` uses Docker service names (e.g., `postgres`, not `localhost`)
+- Verify network configuration allows internal service communication
+- Check that secrets files are mounted correctly for nirn_proxy and sandwich
+
+### Performance Issues
+
+See [Scaling](/deployment/scaling) for container resource limits and worker pool configuration.
+
+## Production Considerations
+
+- **Secrets Management**: Use Docker secrets or environment files for sensitive data
+- **Resource Limits**: Set memory and CPU limits in compose file
+- **Logging**: Configure log rotation to prevent disk exhaustion
+- **Monitoring**: Export Prometheus metrics from sandwich (port 3931)
+- **Backups**: Regularly backup postgres and seaweed volumes

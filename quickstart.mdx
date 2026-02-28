@@ -1,80 +1,409 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Get Template Worker running in minutes with this step-by-step guide
 ---
 
-## Get started in three steps
+# Quickstart Guide
 
-Get your documentation site running locally and make your first customization.
-
-### Step 1: Set up your local environment
-
-<AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
-  </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 2: Deploy your changes
-
-<AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
-
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
-
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
-  </Accordion>
-</AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
-
-## Next steps
-
-Now that you have your docs running, explore these key features:
-
-<CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
-</CardGroup>
+This guide will help you get Template Worker up and running quickly. By the end, you'll have a working worker pool that can execute templates and handle Discord events.
 
 <Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
+  This quickstart assumes you have Rust, PostgreSQL, and basic familiarity with Discord bots. For production deployments, see the [Deployment](/deployment/docker) guides.
 </Note>
+
+## Prerequisites
+
+Before you begin, ensure you have:
+
+- **Rust** (1.70 or later) - [Install Rust](https://rustup.rs/)
+- **PostgreSQL** (14 or later) - Running database instance
+- **Discord Bot Token** - From the [Discord Developer Portal](https://discord.com/developers/applications)
+- **Object Storage** - S3-compatible storage or local filesystem
+- **Sandwich Gateway** (optional) - For production Discord gateway proxy
+
+<Steps>
+
+### Clone and Build
+
+First, clone the repository and build the project:
+
+```bash
+git clone https://github.com/Anti-Raid/template-worker.git
+cd template-worker
+cargo build --release
+```
+
+The first build will take several minutes as Cargo downloads and compiles dependencies.
+
+### Configure the Application
+
+Create a `config.yaml` file in the project root:
+
+```yaml
+discord_auth:
+  token: "YOUR_BOT_TOKEN"
+  client_id: "YOUR_CLIENT_ID"
+  client_secret: "YOUR_CLIENT_SECRET"
+  root_users:
+    - "123456789012345678"  # Your Discord user ID
+  allowed_redirects:
+    - "http://localhost:3000"
+
+meta:
+  postgres_url: "postgresql://user:password@localhost/antiraid"
+  proxy: "http://localhost:8080"  # Or your proxy URL
+  support_server_invite: "https://discord.gg/your-invite"
+  sandwich_http_api: "http://localhost:8000"  # Sandwich gateway API
+  default_error_channel: "1234567890"  # Channel ID for error logs
+
+object_storage:
+  type: "local"  # Use "s3-like" for production
+  base_path: "./data/storage"
+  # For S3-compatible storage:
+  # type: "s3-like"
+  # endpoint: "s3.amazonaws.com"
+  # access_key: "YOUR_ACCESS_KEY"
+  # secret_key: "YOUR_SECRET_KEY"
+  # secure: true
+  # cdn_endpoint: "cdn.example.com"
+  # cdn_secure: true
+
+sites:
+  api: "http://localhost:3030"
+  frontend: "http://localhost:3000"
+  docs: "https://docs.antiraid.xyz"
+
+servers:
+  main: "1234567890"  # Your main guild ID
+
+addrs:
+  template_worker: "0.0.0.0:3030"  # Public API address
+  mesophyll_server: "127.0.0.1:0"  # Mesophyll coordination (random port)
+```
+
+<Warning>
+  Never commit your `config.yaml` file to version control. Add it to `.gitignore` immediately.
+</Warning>
+
+### Set Up the Database
+
+Run the database migrations to create the required schema:
+
+```bash
+cargo run --release -- --worker-type migrate
+```
+
+This will:
+- Connect to your PostgreSQL database
+- Create all required tables
+- Set up indexes and constraints
+- Prepare the database for worker operations
+
+You should see output like:
+
+```
+(template_worker) INFO - Connecting to database
+(migrations) INFO - Applying migration: tenantstate
+(migrations) INFO - Applying migration: kv_generic
+(migrations) INFO - All migrations applied successfully
+```
+
+### Register Discord Commands
+
+Register the bot's slash commands with Discord:
+
+```bash
+cargo run --release -- --worker-type register
+```
+
+This reads the built-in command definitions and registers them globally with Discord's API. Commands will be available within an hour (or instantly in your development guild).
+
+<Info>
+  You only need to run this when commands change. Discord caches command definitions.
+</Info>
+
+### Start the Worker Pool
+
+Now you're ready to start the actual worker system. Template Worker supports two main topologies:
+
+#### Option 1: Thread Pool (Development)
+
+For development and testing, use the thread-based worker pool:
+
+```bash
+cargo run --release -- --worker-type threadpool
+```
+
+This starts:
+- A pool of `WorkerThread` instances
+- Each worker in its own thread
+- Communication via Tokio channels
+- Shared database connections
+
+**Advantages:**
+- Faster startup
+- Lower memory usage
+- Easier debugging
+- Single process to manage
+
+**Use when:**
+- Developing locally
+- Testing templates
+- Running in resource-constrained environments
+
+#### Option 2: Process Pool (Production)
+
+For production deployments, use the process-based worker pool:
+
+```bash
+cargo run --release -- --worker-type processpool --process-workers 4
+```
+
+This starts:
+- A master process managing the pool
+- Multiple worker processes (one per shard)
+- Communication via Mesophyll (WebSocket)
+- True process isolation
+
+**Advantages:**
+- Better fault isolation
+- Independent worker crashes
+- Production-grade reliability
+- Scales to many workers
+
+**Use when:**
+- Running in production
+- Handling many guilds
+- Need maximum reliability
+
+<Tip>
+  Set `--process-workers` to match your Discord shard count for optimal guild distribution.
+</Tip>
+
+### Test the Shell (Optional)
+
+Template Worker includes an interactive Fauxpas shell for testing Lua templates:
+
+```bash
+cargo run --release -- --worker-type shell
+```
+
+This launches a REPL where you can:
+
+- Execute Luau code interactively
+- Test template functions
+- Debug worker behavior
+- Prototype new features
+
+Example session:
+
+```lua
+fauxpas> print("Hello from Template Worker!")
+Hello from Template Worker!
+
+fauxpas> local result = 2 + 2
+fauxpas> print(result)
+4
+
+fauxpas> -- Access built-in functions
+fauxpas> local discord = require("@antiraid/discord")
+fauxpas> print(discord.version)
+```
+
+<Info>
+  The shell doesn't provide full worker environment access yet, but it's useful for testing Lua logic and debugging templates.
+</Info>
+
+</Steps>
+
+## Configuration Options
+
+Template Worker accepts several command-line arguments to customize behavior:
+
+### Common Arguments
+
+```bash
+--worker-type <TYPE>         # Worker mode: register, migrate, shell, threadpool, processpool
+--max-db-connections <NUM>   # Database connection pool size (default: 7)
+--worker-debug              # Enable debug logging for Luau VMs
+--tokio-threads-master <NUM> # Tokio threads for master process (default: 10)
+--tokio-threads-worker <NUM> # Tokio threads per worker (default: 3)
+--use-tokio-console         # Enable tokio-console debugging
+```
+
+### Process Pool Specific
+
+```bash
+--process-workers <NUM>  # Number of worker processes to spawn
+--worker-id <ID>        # Worker ID (only for processpoolworker mode)
+```
+
+### Example Configurations
+
+**Development setup:**
+```bash
+cargo run --release -- \
+  --worker-type threadpool \
+  --max-db-connections 3 \
+  --worker-debug
+```
+
+**Production setup:**
+```bash
+cargo run --release -- \
+  --worker-type processpool \
+  --process-workers 16 \
+  --max-db-connections 10 \
+  --tokio-threads-master 20 \
+  --tokio-threads-worker 5
+```
+
+**Debug with tokio-console:**
+```bash
+cargo run --release -- \
+  --worker-type threadpool \
+  --use-tokio-console
+```
+
+## Verify the Installation
+
+Once your worker is running, verify everything works:
+
+### Check the API
+
+The worker exposes an HTTP API (default port 3030):
+
+```bash
+curl http://localhost:3030/health
+```
+
+You should receive a health check response.
+
+### View OpenAPI Documentation
+
+Template Worker includes interactive API documentation at:
+
+```
+http://localhost:3030/swagger-ui/
+```
+
+This shows all available endpoints with:
+- Request/response schemas
+- Authentication requirements
+- Example payloads
+- Try-it-out functionality
+
+### Check Logs
+
+The worker logs important events to stdout:
+
+```
+(template_worker) INFO - Proxy URL: http://localhost:8080
+(template_worker) INFO - HttpBuilder done
+(template_worker) INFO - Connecting to database
+(template_worker) INFO - Current user: AntiRaid (1234567890)
+(template_worker) INFO - Starting RPC server
+(template_worker) INFO - Starting using autosharding
+```
+
+<Note>
+  Worker processes log with `[Worker N]` prefixes to distinguish output from different workers.
+</Note>
+
+## Understanding Worker Modes
+
+Template Worker supports six different operational modes:
+
+<CodeGroup>
+```bash register
+# Register Discord slash commands
+cargo run -- --worker-type register
+```
+
+```bash migrate
+# Apply database migrations
+cargo run -- --worker-type migrate
+```
+
+```bash shell
+# Launch interactive Fauxpas shell
+cargo run -- --worker-type shell
+```
+
+```bash threadpool
+# Start thread-based worker pool
+cargo run -- --worker-type threadpool
+```
+
+```bash processpool
+# Start process-based worker pool
+cargo run -- --worker-type processpool --process-workers 4
+```
+
+```bash processpoolworker
+# Internal: Single worker in a process pool
+# (Started automatically by processpool mode)
+cargo run -- --worker-type processpoolworker --worker-id 0 --process-workers 4
+```
+</CodeGroup>
+
+## Next Steps
+
+Now that you have Template Worker running, explore:
+
+<CardGroup cols={2}>
+  <Card title="Architecture Overview" icon="sitemap" href="/architecture/overview">
+    Learn how the worker system is designed
+  </Card>
+  <Card title="Worker System Deep Dive" icon="gears" href="/architecture/worker-system">
+    Understand WorkerLike, pools, and topologies
+  </Card>
+  <Card title="Configuration Guide" icon="sliders" href="/configuration/setup">
+    Complete configuration reference
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/authentication">
+    Explore the HTTP and WebSocket APIs
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+### Database Connection Errors
+
+If you see connection errors:
+
+1. Verify PostgreSQL is running: `psql -U user -d antiraid`
+2. Check the connection string in `config.yaml`
+3. Ensure the database exists: `createdb antiraid`
+4. Verify network access if using remote database
+
+### Discord Authentication Errors
+
+If the bot can't authenticate:
+
+1. Verify your bot token is correct
+2. Check that the bot has required intents enabled
+3. Ensure the client ID matches your application
+4. Confirm the bot is added to at least one guild
+
+### Compilation Errors
+
+If the build fails:
+
+1. Update Rust: `rustup update`
+2. Clean build artifacts: `cargo clean`
+3. Check Cargo.toml dependencies are accessible
+4. Ensure you have required system libraries
+
+### Worker Startup Issues
+
+If workers fail to start:
+
+1. Check logs for specific error messages
+2. Verify all config.yaml fields are filled
+3. Ensure ports are not already in use
+4. Check file permissions for object storage path
+
+<Warning>
+  For process pool mode, ensure your system allows enough open file descriptors. Use `ulimit -n 65535` on Linux/macOS.
+</Warning>

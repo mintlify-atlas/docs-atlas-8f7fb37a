@@ -1,0 +1,170 @@
+---
+title: Setup
+description: Initial setup and configuration for Template Worker
+---
+
+## Prerequisites
+
+Before setting up Template Worker, ensure you have the following:
+
+- **PostgreSQL** 12 or later
+- **Rust** 1.92 or later (for building from source)
+- **Discord Bot Token** and application credentials
+- **Object Storage** (S3-compatible or local filesystem)
+- **Sandwich Gateway** for Discord gateway connections
+- **Nirn Proxy** for Discord REST API requests
+
+## Installation
+
+### Using Docker
+
+The recommended way to run Template Worker is using Docker with the provided `docker-compose.yml`:
+
+```bash
+docker-compose up -d template-worker
+```
+
+This will automatically set up all required dependencies including PostgreSQL, Sandwich, and Nirn Proxy.
+
+### Building from Source
+
+1. Clone the repository and install dependencies:
+
+```bash
+git clone <repository-url>
+cd template-worker
+```
+
+2. Build the project:
+
+```bash
+cargo build --release
+```
+
+3. The binary will be available at `target/release/template-worker`
+
+## Configuration File
+
+Template Worker requires a `config.yaml` file in the working directory. The application will fail to start if this file is missing.
+
+### Configuration Structure
+
+The configuration file uses YAML format with the following top-level sections:
+
+```yaml
+discord_auth:
+  token: "your-bot-token"
+  client_id: 123456789
+  client_secret: "your-client-secret"
+  root_users:
+    - 123456789  # Discord user IDs with root access
+  allowed_redirects:
+    - "https://your-domain.com/oauth/callback"
+
+meta:
+  postgres_url: "postgresql://user:password@localhost/database"
+  proxy: "http://nirn-proxy:3221"
+  support_server_invite: "https://discord.gg/your-invite"
+  sandwich_http_api: "http://sandwich:29334/antiraid"
+  default_error_channel: 123456789  # Channel ID for error reporting
+
+sites:
+  api: "https://api.your-domain.com"
+  frontend: "https://your-domain.com"
+  docs: "https://docs.your-domain.com"
+
+servers:
+  main: 123456789  # Main Discord guild ID
+
+object_storage:
+  type: "s3-like"  # or "local"
+  base_path: "antiraid.rust"
+  endpoint: "seaweed:9333"
+  secure: false
+  cdn_endpoint: "cdn.your-domain.com"
+  cdn_secure: true
+  access_key: "your-access-key"
+  secret_key: "your-secret-key"
+
+addrs:
+  template_worker: "0.0.0.0:60000"
+  mesophyll_server: "0.0.0.0:60001"
+```
+
+### Discord Authentication
+
+<ParamField path="discord_auth.token" type="string" required>
+  Discord bot token for authentication
+</ParamField>
+
+<ParamField path="discord_auth.client_id" type="UserId" required>
+  Discord application client ID
+</ParamField>
+
+<ParamField path="discord_auth.client_secret" type="string" required>
+  Discord OAuth2 client secret
+</ParamField>
+
+<ParamField path="discord_auth.root_users" type="array<UserId>" required>
+  List of Discord user IDs with root access to internal APIs
+</ParamField>
+
+<ParamField path="discord_auth.allowed_redirects" type="array<string>" required>
+  Whitelist of allowed OAuth2 redirect URLs
+</ParamField>
+
+### Object Storage Configuration
+
+<ParamField path="object_storage.type" type="enum" required>
+  Storage backend type. Options:
+  - `s3-like`: S3-compatible storage (e.g., SeaweedFS, MinIO, AWS S3)
+  - `local`: Local filesystem storage
+</ParamField>
+
+<ParamField path="object_storage.base_path" type="string" required>
+  For S3-like: bucket name. For local: filesystem path
+</ParamField>
+
+<ParamField path="object_storage.endpoint" type="string">
+  S3 endpoint URL (required for s3-like type)
+</ParamField>
+
+<ParamField path="object_storage.secure" type="boolean" default="false">
+  Use HTTPS for S3 endpoint connections
+</ParamField>
+
+<ParamField path="object_storage.cdn_endpoint" type="string">
+  CDN endpoint for serving objects (required for s3-like type)
+</ParamField>
+
+<ParamField path="object_storage.cdn_secure" type="boolean" default="false">
+  Use HTTPS for CDN endpoint
+</ParamField>
+
+<ParamField path="object_storage.access_key" type="string">
+  S3 access key (required for s3-like type)
+</ParamField>
+
+<ParamField path="object_storage.secret_key" type="string">
+  S3 secret key (required for s3-like type)
+</ParamField>
+
+### Service Addresses
+
+<ParamField path="addrs.template_worker" type="string" required>
+  Bind address for the Template Worker HTTP API server
+  
+  Default: `0.0.0.0:60000`
+</ParamField>
+
+<ParamField path="addrs.mesophyll_server" type="string" required>
+  Bind address for the Mesophyll IPC server (process pool mode)
+  
+  Default: `0.0.0.0:60001`
+</ParamField>
+
+## Next Steps
+
+- Configure [environment variables](/configuration/environment) for runtime settings
+- Set up [database](/configuration/database) and run migrations
+- Choose a worker type (process pool or thread pool) for your deployment

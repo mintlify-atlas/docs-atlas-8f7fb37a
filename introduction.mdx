@@ -1,0 +1,203 @@
+---
+title: Introduction
+description: A high-performance worker system for dispatching templates and managing event lifecycles in Anti-Raid
+---
+
+# Template Worker
+
+Template Worker is a sophisticated process that handles dispatching templates and runs expiry tasks for Anti-Raid. Built in Rust, it provides a robust, scalable architecture for managing Luau VM execution, event dispatching, and inter-worker communication.
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get Template Worker up and running in minutes
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/architecture/overview">
+    Understand the worker system design
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/authentication">
+    Explore the HTTP and WebSocket APIs
+  </Card>
+  <Card title="Deployment" icon="server" href="/deployment/docker">
+    Deploy to production environments
+  </Card>
+</CardGroup>
+
+## What is Template Worker?
+
+Template Worker is the core infrastructure component that powers Anti-Raid's template execution system. It manages:
+
+- **Luau VM lifecycle** - Creates and manages virtual machines for executing custom templates per guild/user
+- **Event dispatching** - Routes Discord events to the appropriate templates and workers
+- **Key expiry system** - Handles time-based key expiration and dispatches expiry events
+- **Worker coordination** - Coordinates communication between multiple worker processes via Mesophyll
+- **Database state** - Manages persistent storage for templates, key-value pairs, and guild data
+
+<Note>
+  Template Worker supports both thread-based and process-based worker topologies, allowing you to scale from development to production seamlessly.
+</Note>
+
+## Key Features
+
+### Multi-Topology Worker Pools
+
+Template Worker supports multiple worker architectures to fit different deployment scenarios:
+
+- **ThreadPool** - Thread-based workers for development and lightweight deployments
+- **ProcessPool** - Process-based workers for production with true isolation
+- **Hybrid mode** - Mix worker types based on your needs
+
+Each worker topology implements the `WorkerLike` trait, providing a consistent interface regardless of the underlying architecture.
+
+```rust
+// Workers implement a common interface
+pub trait WorkerLike: Send + Sync + 'static {
+    async fn dispatch_event(&self, id: Id, event: CreateEvent) -> Result<KhronosValue, Error>;
+    async fn run_script(&self, id: Id, name: String, code: String, event: CreateEvent) -> Result<KhronosValue, Error>;
+    async fn drop_tenant(&self, id: Id) -> Result<(), Error>;
+    async fn kill(&self) -> Result<(), Error>;
+}
+```
+
+### Mesophyll Coordination Layer
+
+Mesophyll is the WebSocket-based coordination layer that enables:
+
+- **Inter-worker communication** - Workers can broadcast updates to other workers
+- **State synchronization** - Shared state management across worker processes
+- **Database access** - Centralized database operations from worker processes
+- **Future extensibility** - Foundation for template shops and cross-worker features
+
+<Info>
+  Mesophyll runs on the master process and uses randomized ports and tokens to prevent spoofing.
+</Info>
+
+### Luau VM Management
+
+Each worker manages multiple Luau (typed Lua) virtual machines:
+
+- **Per-guild VMs** - Isolated execution environments for each Discord server
+- **Per-user VMs** - Separate contexts for user-specific templates
+- **Built-in libraries** - Embedded VFS with core Discord commands and utilities
+- **Template context** - Full access to Discord API, key-value storage, and event data
+
+### HTTP/WebSocket APIs
+
+Template Worker exposes both public and internal APIs:
+
+**Public API** (documented with OpenAPI):
+- Guild event dispatching
+- User session management
+- Global key-value operations
+- Guild information retrieval
+
+**Internal API** (via Mesophyll):
+- Worker-to-worker communication
+- Database state synchronization
+- Template shop coordination
+
+### Database State Management
+
+Comprehensive database operations including:
+
+- **PostgreSQL connection pooling** - Efficient database access
+- **Migration system** - Built-in schema migrations
+- **Key-value store** - Redis-like operations for templates
+- **Object storage** - S3-compatible or local file storage
+
+### Event Dispatching System
+
+Sophisticated event handling:
+
+- **Discord Gateway integration** - Via Sandwich gateway proxy
+- **Resume keys** - Support for long-running operations
+- **Deferred cache regeneration** - Optimized performance
+- **Sharding support** - Distribute guilds across workers using Discord's formula
+
+### Fauxpas Shell
+
+An interactive debugging shell for:
+
+- **Lua code execution** - Test templates in a REPL environment
+- **Worker inspection** - Debug running templates and state
+- **Development workflow** - Rapid prototyping and testing
+
+```bash
+# Launch the interactive shell
+cargo run -- --worker-type shell
+```
+
+## Worker Pool Architecture
+
+Template Worker uses Discord's sharding formula to distribute guilds across workers:
+
+```rust
+// Guild assignment formula
+shard_id = (guild_id >> 22) % num_shards
+```
+
+This ensures:
+- **Even distribution** - Guilds are balanced across workers
+- **Deterministic routing** - Same guild always goes to the same worker
+- **Scalability** - Add more workers to handle more guilds
+
+<Tip>
+  For production deployments, use the ProcessPool topology with the number of workers matching your shard count for optimal performance.
+</Tip>
+
+## Use Cases
+
+### Development
+Use `threadpool` mode for rapid development:
+- Fast startup times
+- Lower resource usage
+- Easier debugging
+
+### Production
+Use `processpool` mode for production:
+- True process isolation
+- Better fault tolerance
+- Independent worker failures
+
+### Testing
+Use `shell` mode for testing:
+- Interactive REPL
+- Immediate feedback
+- Template debugging
+
+### Migrations
+Use `migrate` mode for database updates:
+- Apply schema changes
+- One-time setup operations
+- Database maintenance
+
+### Command Registration
+Use `register` mode to register Discord commands:
+- Update slash commands
+- Sync command definitions
+- Deploy new features
+
+## Component Overview
+
+Template Worker is organized into several key modules:
+
+- **api** - HTTP API server with OpenAPI documentation
+- **mesophyll** - WebSocket-based inter-worker communication
+- **worker** - Core worker pool and VM management
+- **fauxpas** - Interactive shell and mock API for testing
+- **geese** - Storage systems (Sandwich gateway, ObjectStore)
+- **migrations** - Database schema management
+
+<Warning>
+  Each component is designed to do one thing well with minimal coupling. Avoid creating interdependencies between components.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Get Started" icon="play" href="/quickstart">
+    Follow the quickstart guide to run your first worker
+  </Card>
+  <Card title="Learn the Architecture" icon="book" href="/architecture/worker-system">
+    Deep dive into the worker system design
+  </Card>
+</CardGroup>

@@ -1,0 +1,398 @@
+---
+title: Systemd Deployment
+description: Deploy Template Worker as a systemd service for process management and supervision
+---
+
+## Overview
+
+For production Linux deployments, systemd provides robust process management, automatic restarts, and service dependency handling. This guide covers creating systemd unit files and managing Template Worker as a system service.
+
+## Basic Service Unit
+
+Here's a complete systemd service unit file for Template Worker:
+
+```ini
+[Unit]
+Description=Template Worker Service
+After=network.target postgresql.service
+PartOf=antiraid-v6.target
+
+[Service]
+Type=simple
+User=antiraid
+Group=antiraid
+WorkingDirectory=/home/antiraid/template-worker
+ExecStart=/home/antiraid/template-worker/template-worker --worker-type processpool
+ExecReload=/bin/kill -s HUP $MAINPID
+KillMode=mixed
+TimeoutStopSec=5
+PrivateTmp=true
+RestartSec=1
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Service Configuration Explained
+
+| Directive | Purpose |
+|-----------|----------|
+| `Type=simple` | Process doesn't fork; stays in foreground |
+| `User=antiraid` | Run as non-privileged user |
+| `WorkingDirectory` | Sets working directory for config.yaml |
+| `ExecStart` | Command to start the worker |
+| `ExecReload` | Send HUP signal for graceful reload |
+| `KillMode=mixed` | Send SIGTERM to main, SIGKILL to others |
+| `TimeoutStopSec=5` | Wait 5s for graceful shutdown |
+| `PrivateTmp=true` | Isolate /tmp directory for security |
+| `Restart=always` | Auto-restart on failure |
+| `RestartSec=1` | Wait 1s before restart attempt |
+
+## Installation
+
+<Steps>
+
+<Step title="Create service user">
+
+Create a dedicated user for running the service:
+
+```bash
+sudo useradd -r -s /bin/false antiraid
+```
+
+</Step>
+
+<Step title="Deploy binary and config">
+
+Copy your built binary and configuration:
+
+```bash
+sudo mkdir -p /home/antiraid/template-worker
+sudo cp target/release/template-worker /home/antiraid/template-worker/
+sudo cp config.yaml /home/antiraid/template-worker/
+sudo chown -R antiraid:antiraid /home/antiraid/template-worker
+```
+
+</Step>
+
+<Step title="Create systemd unit file">
+
+Create the service file at `/etc/systemd/system/template-worker.service`:
+
+```bash
+sudo nano /etc/systemd/system/template-worker.service
+```
+
+Paste the unit file content from above.
+
+</Step>
+
+<Step title="Reload systemd and enable service">
+
+```bash
+# Reload systemd configuration
+sudo systemctl daemon-reload
+
+# Enable service to start on boot
+sudo systemctl enable template-worker.service
+```
+
+</Step>
+
+<Step title="Start the service">
+
+```bash
+sudo systemctl start template-worker.service
+```
+
+</Step>
+
+</Steps>
+
+## Service Management
+
+### Common Commands
+
+```bash
+# Start the service
+sudo systemctl start template-worker
+
+# Stop the service
+sudo systemctl stop template-worker
+
+# Restart the service
+sudo systemctl restart template-worker
+
+# Reload configuration (sends SIGHUP)
+sudo systemctl reload template-worker
+
+# View status
+sudo systemctl status template-worker
+
+# View logs
+sudo journalctl -u template-worker -f
+
+# View logs since boot
+sudo journalctl -u template-worker -b
+
+# View logs from last hour
+sudo journalctl -u template-worker --since "1 hour ago"
+```
+
+### Service Status
+
+Check if the service is running:
+
+```bash
+sudo systemctl status template-worker
+```
+
+Output should show:
+```
+● template-worker.service - Template Worker Service
+   Loaded: loaded (/etc/systemd/system/template-worker.service; enabled)
+   Active: active (running) since ...
+```
+
+## Worker Type Configuration
+
+Template Worker supports multiple worker modes via command-line arguments. See [Scaling](/deployment/scaling) for detailed comparison.
+
+### Process Pool (Recommended)
+
+```ini
+ExecStart=/home/antiraid/template-worker/template-worker --worker-type processpool
+```
+
+Default mode. Spawns separate processes for isolation.
+
+### Thread Pool
+
+```ini
+ExecStart=/home/antiraid/template-worker/template-worker --worker-type threadpool --tokio-threads-master 15
+```
+
+Uses threads instead of processes. Lower overhead but less isolation.
+
+### Custom Worker Count
+
+```ini
+ExecStart=/home/antiraid/template-worker/template-worker --worker-type processpool --process-workers 8
+```
+
+## Multi-Service Deployment
+
+For complex deployments with multiple services, create a target unit to manage them together.
+
+### Create Target Unit
+
+Create `/etc/systemd/system/antiraid-v6.target`:
+
+```ini
+[Unit]
+Description=AntiRaid v6 Service Stack
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Link Services to Target
+
+In each service unit file, add:
+
+```ini
+[Unit]
+PartOf=antiraid-v6.target
+```
+
+### Example: Multiple Services
+
+**Sandwich Gateway Service** (`ar-sandwich.service`):
+
+```ini
+[Unit]
+Description=AntiRaid Sandwich Daemon (gateway proxy)
+After=network.target
+PartOf=antiraid-v6.target
+
+[Service]
+Type=simple
+User=antiraid-secure
+Group=antiraid-secure
+WorkingDirectory=/home/antiraid-secure/sandwich-daemon
+ExecStart=/home/antiraid-secure/sandwich-daemon/sandwich \
+  -configurationPath=sandwich.yaml \
+  -prometheusAddress :3931 \
+  -httpEnabled \
+  --httpHost 0.0.0.0:29334 \
+  -level debug
+ExecReload=/bin/kill -s HUP $MAINPID
+KillMode=mixed
+TimeoutStopSec=5
+PrivateTmp=true
+RestartSec=1
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+**Template Worker Service** (`template-worker.service`):
+
+```ini
+[Unit]
+Description=Template Worker Service
+After=network.target postgresql.service ar-sandwich.service
+PartOf=antiraid-v6.target
+
+[Service]
+Type=simple
+User=antiraid
+Group=antiraid
+WorkingDirectory=/home/antiraid/template-worker
+ExecStart=/home/antiraid/template-worker/template-worker --worker-type processpool
+ExecReload=/bin/kill -s HUP $MAINPID
+KillMode=mixed
+TimeoutStopSec=5
+PrivateTmp=true
+RestartSec=1
+Restart=always
+
+[Install]
+WantedBy=multi-user.target
+```
+
+### Managing the Service Stack
+
+```bash
+# Start all services in target
+sudo systemctl start antiraid-v6.target
+
+# Stop all services in target
+sudo systemctl stop antiraid-v6.target
+
+# View status of all services
+sudo systemctl list-dependencies antiraid-v6.target
+```
+
+## Environment Variables
+
+To pass environment variables to your service, use the `Environment` directive:
+
+```ini
+[Service]
+Environment="RUST_LOG=template-worker=debug"
+Environment="MESOPHYLL_SERVER=localhost:50051"
+```
+
+Or use an environment file:
+
+```ini
+[Service]
+EnvironmentFile=/home/antiraid/template-worker/.env
+```
+
+## Security Hardening
+
+For production deployments, add these security directives:
+
+```ini
+[Service]
+# Security
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/home/antiraid/template-worker
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictNamespaces=true
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=512
+MemoryMax=4G
+CPUQuota=200%
+```
+
+## Monitoring and Logs
+
+### Structured Logging
+
+Template Worker logs to stdout/stderr. Systemd captures these via journald:
+
+```bash
+# Follow logs in real-time
+sudo journalctl -u template-worker -f
+
+# View logs with priority level
+sudo journalctl -u template-worker -p err
+
+# Export logs to file
+sudo journalctl -u template-worker --since today > worker.log
+```
+
+### Log Rotation
+
+Configure journald log retention in `/etc/systemd/journald.conf`:
+
+```ini
+[Journal]
+SystemMaxUse=500M
+SystemMaxFileSize=100M
+MaxRetentionSec=7day
+```
+
+## Troubleshooting
+
+### Service Won't Start
+
+1. Check service status:
+   ```bash
+   sudo systemctl status template-worker
+   ```
+
+2. View recent logs:
+   ```bash
+   sudo journalctl -u template-worker -n 50
+   ```
+
+3. Test binary manually:
+   ```bash
+   sudo -u antiraid /home/antiraid/template-worker/template-worker
+   ```
+
+### Permission Errors
+
+Ensure the service user owns all required files:
+
+```bash
+sudo chown -R antiraid:antiraid /home/antiraid/template-worker
+sudo chmod 600 /home/antiraid/template-worker/config.yaml
+```
+
+### Service Keeps Restarting
+
+1. Check for crashes in logs:
+   ```bash
+   sudo journalctl -u template-worker | grep -i "error\|panic\|crash"
+   ```
+
+2. Verify configuration:
+   ```bash
+   sudo -u antiraid /home/antiraid/template-worker/template-worker --help
+   ```
+
+3. Temporarily disable auto-restart to debug:
+   ```ini
+   [Service]
+   Restart=on-failure
+   ```
+
+## Next Steps
+
+- Configure [worker scaling](/deployment/scaling) for optimal performance
+- Review [configuration options](/configuration/setup) for tuning
+- Explore [Architecture](/architecture/overview) to understand the system internals

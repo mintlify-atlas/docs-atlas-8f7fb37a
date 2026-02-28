@@ -1,0 +1,188 @@
+---
+title: Environment Variables
+description: Command-line arguments and environment variables for Template Worker
+---
+
+## Command-Line Arguments
+
+Template Worker uses command-line arguments for runtime configuration. All arguments can be passed using the `--` prefix.
+
+### Worker Type
+
+<ParamField path="--worker-type" type="enum" default="processpool">
+  Type of worker to use. Options:
+  
+  - `processpool` (alias: `process-pool`): Uses a process pool for executing tasks. **Recommended for production**
+  - `threadpool` (alias: `thread-pool`): Uses a thread pool for executing tasks
+  - `processpoolworker` (alias: `process-pool-worker`): Single worker within a process pool (spawned automatically)
+  - `register` (alias: `register-commands`): Registers Discord commands and exits
+  - `migrate` (alias: `apply-migration`): Applies database migrations and exits
+  - `shell` (alias: `fauxpas`): Spawns a Lua shell for debugging
+</ParamField>
+
+### Database Configuration
+
+<ParamField path="--max-db-connections" type="u32" default="7">
+  Maximum number of connections in the PostgreSQL connection pool
+  
+  Adjust based on your database capacity and expected load. Each worker process/thread will create its own pool.
+</ParamField>
+
+### Worker Pool Settings
+
+<ParamField path="--process-workers" type="usize" optional>
+  Number of process workers to use for the process pool
+  
+  If not specified, defaults to the shard count from Sandwich. Only used when `worker-type` is `processpool`.
+</ParamField>
+
+<ParamField path="--worker-id" type="usize" optional>
+  The worker ID to use when running as a process pool worker
+  
+  Only used when `worker-type` is `processpoolworker`. Set automatically when spawned by the master process.
+</ParamField>
+
+### Runtime Tuning
+
+<ParamField path="--tokio-threads-master" type="usize" default="10">
+  Number of Tokio runtime threads for the master process
+  
+  Used by `processpool`, `threadpool`, and `shell` worker types.
+</ParamField>
+
+<ParamField path="--tokio-threads-worker" type="usize" default="3">
+  Number of Tokio runtime threads for worker processes
+  
+  Used by individual process pool workers. Each worker still uses a single thread for the Lua VM.
+</ParamField>
+
+### Debugging Options
+
+<ParamField path="--use-tokio-console" type="boolean" default="false">
+  Enable Tokio Console for async runtime debugging
+  
+  **Warning**: May increase resource usage. Only enable when debugging async issues.
+</ParamField>
+
+<ParamField path="--worker-debug" type="boolean" default="false">
+  Enable debug logging for Lua workers
+  
+  Provides verbose output from Lua VM execution, useful for debugging templates.
+</ParamField>
+
+## Environment Variables
+
+### Logging
+
+<ParamField path="RUST_LOG" type="string" default="info">
+  Rust logging level configuration
+  
+  Examples:
+  - `template-worker=info`: Info level for the main application
+  - `template-worker=debug,sqlx=warn`: Debug for app, warnings for SQLx
+  - `debug`: Debug level for all modules
+  
+  See [env_logger documentation](https://docs.rs/env_logger) for advanced filtering.
+</ParamField>
+
+### Process Pool Workers
+
+<ParamField path="MESOPHYLL_CLIENT_TOKEN" type="string">
+  Authentication token for Mesophyll IPC client
+  
+  **Required** when running as a process pool worker (`worker-type=processpoolworker`). Set automatically by the master process when spawning workers.
+</ParamField>
+
+## Usage Examples
+
+### Production Deployment (Process Pool)
+
+```bash
+RUST_LOG=template-worker=info ./template-worker \
+  --worker-type processpool \
+  --max-db-connections 7 \
+  --tokio-threads-master 10
+```
+
+### Development (Thread Pool)
+
+```bash
+RUST_LOG=debug ./template-worker \
+  --worker-type threadpool \
+  --max-db-connections 3 \
+  --worker-debug
+```
+
+### Register Discord Commands
+
+```bash
+./template-worker --worker-type register
+```
+
+### Apply Database Migrations
+
+```bash
+./template-worker --worker-type migrate
+```
+
+### Debug Shell
+
+```bash
+RUST_LOG=debug ./template-worker \
+  --worker-type shell \
+  --max-db-connections 3
+```
+
+### Process Pool Worker (Spawned Automatically)
+
+```bash
+# Spawned by master process - not typically run manually
+MESOPHYLL_CLIENT_TOKEN=<token> ./template-worker \
+  --worker-type processpoolworker \
+  --worker-id 0 \
+  --process-workers 4 \
+  --max-db-connections 5
+```
+
+## Docker Configuration
+
+When running in Docker, set environment variables in `docker-compose.yml`:
+
+```yaml
+template-worker:
+  image: template-worker:latest
+  environment:
+    RUST_LOG: "template-worker=info"
+  command: [
+    "--worker-type", "processpool",
+    "--max-db-connections", "7"
+  ]
+```
+
+## Configuration Validation
+
+Template Worker validates configuration at startup:
+
+- Missing `config.yaml` file will cause immediate exit
+- Invalid worker type combinations (e.g., `worker-id` without `processpoolworker`) will panic
+- Missing required environment variables (e.g., `MESOPHYLL_CLIENT_TOKEN` for workers) will panic
+
+## Performance Tuning
+
+### Database Connections
+
+For production deployments:
+- **Process pool**: `--max-db-connections` should be 5-10 per process
+- **Thread pool**: Can use higher values (10-20) since all threads share one pool
+- Monitor your PostgreSQL `max_connections` setting
+
+### Tokio Threads
+
+- **Master process**: 10 threads handles most workloads well
+- **Worker processes**: 3 threads is sufficient since Lua execution is single-threaded per worker
+- Increase if you see high task queue latency in Tokio Console
+
+### Process vs Thread Pool
+
+- **Process pool**: Better isolation, required for production, slightly higher memory usage
+- **Thread pool**: Simpler, good for development, faster startup, shared memory

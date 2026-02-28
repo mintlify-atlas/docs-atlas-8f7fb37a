@@ -1,0 +1,294 @@
+---
+title: Events
+description: Dispatch custom events to guilds and execute Luau scripts
+---
+
+The Events API allows you to dispatch custom events to guilds, triggering Luau script execution within the Template Worker environment.
+
+## Event Dispatching
+
+Dispatch a custom event to a guild and receive the execution results. This allows you to trigger custom Luau scripts and receive their output.
+
+**Endpoint:** `POST /guilds/{guild_id}/events`
+
+```bash Dispatch Event
+curl -X POST https://splashtail-staging.antiraid.xyz/guilds/123456789012345678/events \
+  -H "Authorization: YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "WebCustomAction",
+    "data": {
+      "Text": "Hello from the API!"
+    }
+  }'
+```
+
+<ParamField path="guild_id" type="string" required>
+  The Discord ID of the guild to dispatch the event to
+</ParamField>
+
+<ParamField body="name" type="string" required>
+  The event name. **Must start with "Web" for security reasons.**
+</ParamField>
+
+<ParamField body="data" type="KhronosValue" required>
+  The event data to pass to the Luau script. Can be any valid KhronosValue type.
+</ParamField>
+
+## KhronosValue Types
+
+The `data` field accepts various types of values. Here are the available KhronosValue types:
+
+### Simple Types
+
+```json Text
+{
+  "name": "WebExample",
+  "data": {
+    "Text": "Hello, World!"
+  }
+}
+```
+
+```json Integer
+{
+  "name": "WebExample",
+  "data": {
+    "Integer": 42
+  }
+}
+```
+
+```json Float
+{
+  "name": "WebExample",
+  "data": {
+    "Float": 3.14159
+  }
+}
+```
+
+```json Boolean
+{
+  "name": "WebExample",
+  "data": {
+    "Boolean": true
+  }
+}
+```
+
+```json Null
+{
+  "name": "WebExample",
+  "data": "Null"
+}
+```
+
+### Complex Types
+
+```json List (Array)
+{
+  "name": "WebExample",
+  "data": {
+    "List": [
+      {"Text": "first"},
+      {"Integer": 2},
+      {"Boolean": true}
+    ]
+  }
+}
+```
+
+```json Map (Object)
+{
+  "name": "WebExample",
+  "data": {
+    "Map": [
+      [{"Text": "key1"}, {"Text": "value1"}],
+      [{"Text": "key2"}, {"Integer": 42}]
+    ]
+  }
+}
+```
+
+```json LazyStringMap (Simple Object)
+{
+  "name": "WebExample",
+  "data": {
+    "LazyStringMap": {
+      "action": "update",
+      "target": "user_settings"
+    }
+  }
+}
+```
+
+### Special Types
+
+```json Timestamptz (DateTime)
+{
+  "name": "WebExample",
+  "data": {
+    "Timestamptz": "2026-02-28T12:00:00Z"
+  }
+}
+```
+
+```json Buffer (Bytes)
+{
+  "name": "WebExample",
+  "data": {
+    "Buffer": [72, 101, 108, 108, 111]
+  }
+}
+```
+
+```json Vector (3D Coordinates)
+{
+  "name": "WebExample",
+  "data": {
+    "Vector": [1.0, 2.5, 3.7]
+  }
+}
+```
+
+## Response
+
+The API returns the result of the Luau script execution as a KhronosValue.
+
+<ResponseExample>
+```json Success Response
+{
+  "Text": "Action completed successfully"
+}
+```
+
+```json Complex Response
+{
+  "Map": [
+    [{"Text": "status"}, {"Text": "success"}],
+    [{"Text": "count"}, {"Integer": 5}],
+    [{"Text": "results"}, {
+      "List": [
+        {"Text": "result1"},
+        {"Text": "result2"}
+      ]
+    }]
+  ]
+}
+```
+</ResponseExample>
+
+The response format depends on what your Luau script returns. It will always be a valid KhronosValue type.
+
+## Event Name Restrictions
+
+<Warning>
+  For security reasons, all event names dispatched through the public API **must start with "Web"**.
+  
+  - ✅ Valid: `WebCustomAction`, `WebUserUpdate`, `WebDataSync`
+  - ❌ Invalid: `CustomAction`, `UserUpdate`, `InternalEvent`
+  
+  This restriction ensures that only web-safe events can be triggered externally.
+</Warning>
+
+## Example Use Cases
+
+### Trigger a Custom Action
+
+```bash User Action
+curl -X POST https://splashtail-staging.antiraid.xyz/guilds/123456789012345678/events \
+  -H "Authorization: YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "WebUserAction",
+    "data": {
+      "LazyStringMap": {
+        "action": "vote",
+        "option": "yes"
+      }
+    }
+  }'
+```
+
+### Pass Structured Data
+
+```bash Complex Event
+curl -X POST https://splashtail-staging.antiraid.xyz/guilds/123456789012345678/events \
+  -H "Authorization: YOUR_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "WebFormSubmit",
+    "data": {
+      "Map": [
+        [{"Text": "username"}, {"Text": "john_doe"}],
+        [{"Text": "age"}, {"Integer": 25}],
+        [{"Text": "verified"}, {"Boolean": true}],
+        [{"Text": "tags"}, {
+          "List": [
+            {"Text": "developer"},
+            {"Text": "contributor"}
+          ]
+        }]
+      ]
+    }
+  }'
+```
+
+## Error Handling
+
+<ResponseExample>
+```json Invalid Event Name
+{
+  "message": "Event name must start with 'Web' for security reasons",
+  "code": "Forbidden"
+}
+```
+
+```json Bot Not In Guild
+{
+  "message": "Guild to get settings for does not have the bot?",
+  "code": "NotFound"
+}
+```
+
+```json Execution Error
+{
+  "message": "Failed to dispatch event: script execution timeout",
+  "code": "InternalError"
+}
+```
+</ResponseExample>
+
+## Best Practices
+
+<Tip>
+  - Always validate event names before sending (ensure they start with "Web")
+  - Handle execution errors gracefully - scripts may timeout or fail
+  - Keep event data payloads reasonably sized
+  - Use `LazyStringMap` for simple key-value data instead of complex `Map` structures
+  - Test your Luau scripts thoroughly before deploying to production
+</Tip>
+
+## Luau Script Integration
+
+To handle custom events in your guild, you'll need to set up Luau scripts that listen for your custom event names. The event data you send will be available in the Luau script's event handler.
+
+Example Luau script:
+
+```lua Event Handler Example
+-- Listen for WebCustomAction events
+function onWebCustomAction(event)
+    local message = event.data.Text or "No message"
+    
+    -- Process the event
+    print("Received message: " .. message)
+    
+    -- Return a response
+    return {
+        Text = "Action completed: " .. message
+    }
+end
+```
+
+Refer to the Template Worker Luau documentation for more details on writing event handlers.

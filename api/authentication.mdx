@@ -1,0 +1,237 @@
+---
+title: Authentication
+description: Learn how to authenticate with the Template Worker Public API
+---
+
+The Template Worker Public API uses OAuth2 for user authentication and supports both session-based and API token authentication.
+
+## Authentication Methods
+
+The API supports two types of authentication:
+
+1. **OAuth2 Login Sessions** - For web applications and interactive use
+2. **API Tokens** - For programmatic access and automation
+
+## OAuth2 Flow
+
+### Creating an OAuth2 Session
+
+To authenticate a user via Discord OAuth2, you'll need to:
+
+1. Direct users to Discord's OAuth2 authorization URL with the `identify` and `guilds` scopes
+2. Handle the OAuth2 callback with the authorization code
+3. Exchange the code for a session token
+
+<CodeGroup>
+```bash Discord OAuth2 URL
+https://discord.com/api/oauth2/authorize?
+  client_id=YOUR_CLIENT_ID&
+  redirect_uri=YOUR_REDIRECT_URI&
+  response_type=code&
+  scope=identify%20guilds
+```
+
+```bash Exchange Code for Token
+curl -X POST https://splashtail-staging.antiraid.xyz/oauth2 \
+  -H "Content-Type: application/json" \
+  -d '{
+    "code": "OAUTH2_CODE",
+    "redirect_uri": "YOUR_REDIRECT_URI",
+    "code_verifier": "OPTIONAL_PKCE_VERIFIER"
+  }'
+```
+</CodeGroup>
+
+**Endpoint:** `POST /oauth2`
+
+<ParamField body="code" type="string" required>
+  The OAuth2 authorization code from Discord
+</ParamField>
+
+<ParamField body="redirect_uri" type="string" required>
+  The redirect URI used in the OAuth2 flow. Must be in the allowed redirects list.
+</ParamField>
+
+<ParamField body="code_verifier" type="string">
+  Optional PKCE code verifier for enhanced security (required for app logins)
+</ParamField>
+
+<ResponseExample>
+```json Success Response
+{
+  "user_id": "123456789012345678",
+  "token": "long_session_token_here",
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "expiry": "2026-02-28T12:00:00Z",
+  "user": {
+    "id": "123456789012345678",
+    "username": "exampleuser",
+    "global_name": "Example User",
+    "avatar": "a_1234567890abcdef"
+  }
+}
+```
+</ResponseExample>
+
+<ResponseField name="user_id" type="string">
+  The Discord user ID
+</ResponseField>
+
+<ResponseField name="token" type="string">
+  The session token to use for API authentication
+</ResponseField>
+
+<ResponseField name="session_id" type="string">
+  The unique session identifier (UUID)
+</ResponseField>
+
+<ResponseField name="expiry" type="string">
+  ISO 8601 timestamp when the session expires
+</ResponseField>
+
+<ResponseField name="user" type="object">
+  Partial user information (only returned on OAuth2 login)
+  
+  <Expandable title="user properties">
+    <ResponseField name="id" type="string">
+      The Discord user ID
+    </ResponseField>
+    
+    <ResponseField name="username" type="string">
+      The user's Discord username
+    </ResponseField>
+    
+    <ResponseField name="global_name" type="string">
+      The user's display name
+    </ResponseField>
+    
+    <ResponseField name="avatar" type="string">
+      The user's avatar hash
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Session Types
+
+- **login**: Standard web login session (1 hour expiry)
+- **app_login**: Application login with PKCE (14 days expiry)
+- **api**: API token with custom expiry
+
+## API Tokens
+
+API tokens provide long-lived authentication for programmatic access.
+
+### Creating an API Token
+
+You must have an existing authenticated session to create API tokens.
+
+```bash Create API Token
+curl -X POST https://splashtail-staging.antiraid.xyz/sessions \
+  -H "Authorization: YOUR_SESSION_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "My API Token",
+    "type": "api",
+    "expiry": 2592000
+  }'
+```
+
+**Endpoint:** `POST /sessions`
+
+<ParamField body="name" type="string" required>
+  A descriptive name for the API token
+</ParamField>
+
+<ParamField body="type" type="string" required>
+  Must be "api" (only API tokens can be created via this endpoint)
+</ParamField>
+
+<ParamField body="expiry" type="integer" required>
+  Expiry time in seconds (must be between 0 and 9223372036854775)
+</ParamField>
+
+<ResponseExample>
+```json API Token Response
+{
+  "user_id": "123456789012345678",
+  "token": "your_api_token_here",
+  "session_id": "550e8400-e29b-41d4-a716-446655440000",
+  "expiry": "2026-03-30T12:00:00Z",
+  "user": null
+}
+```
+</ResponseExample>
+
+## Using Authentication
+
+Once you have a session token or API token, include it in the `Authorization` header:
+
+```bash Authenticated Request
+curl -X GET https://splashtail-staging.antiraid.xyz/sessions/@me \
+  -H "Authorization: YOUR_TOKEN_HERE"
+```
+
+### Get Current Session
+
+Retrieve information about your authenticated session:
+
+**Endpoint:** `GET /sessions/@me`
+
+```bash Get Session Info
+curl -X GET https://splashtail-staging.antiraid.xyz/sessions/@me \
+  -H "Authorization: YOUR_TOKEN"
+```
+
+<ResponseExample>
+```json Session Info
+{
+  "user_id": "123456789012345678",
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "state": "normal",
+  "type": "api"
+}
+```
+</ResponseExample>
+
+<ResponseField name="user_id" type="string">
+  The authenticated user's Discord ID
+</ResponseField>
+
+<ResponseField name="id" type="string">
+  The session ID
+</ResponseField>
+
+<ResponseField name="state" type="string">
+  User state (e.g., "normal", "banned")
+</ResponseField>
+
+<ResponseField name="type" type="string">
+  Session type ("login", "app_login", or "api")
+</ResponseField>
+
+## Security Notes
+
+<Warning>
+  - Never share your API tokens or session tokens
+  - Store tokens securely and never commit them to version control
+  - OAuth2 codes can only be used once - the API caches used codes for 10 minutes to prevent reuse
+  - Redirect URIs must be pre-configured in the allowed redirects list
+  - The `identify` and `guilds` scopes are required for OAuth2 authentication
+</Warning>
+
+## Error Handling
+
+Authentication errors return appropriate HTTP status codes:
+
+- **401 Unauthorized**: Missing or invalid authentication token
+- **403 Forbidden**: User is banned or lacks required permissions
+- **400 Bad Request**: Invalid request format or parameters
+
+<ResponseExample>
+```json Error Response
+{
+  "message": "Invalid token specified",
+  "code": "InvalidToken"
+}
+```
+</ResponseExample>

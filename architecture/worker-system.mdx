@@ -1,0 +1,415 @@
+---
+title: Worker System
+description: Deep dive into WorkerLike trait, worker pools, and execution topologies
+---
+
+## WorkerLike Trait
+
+The `WorkerLike` trait defines the core interface that all worker implementations must satisfy. It provides a unified abstraction for both single workers and worker pools.
+
+### Trait Definition
+
+```rust
+#[async_trait]
+pub trait WorkerLike: Send + Sync + 'static {
+    fn id(&self) -> usize;
+    fn clone_to_arc(&self) -> Arc<dyn WorkerLike + Send + Sync>;
+    async fn run_script(&self, id: Id, name: String, code: String, event: CreateEvent) -> Result<KhronosValue, crate::Error>;
+    async fn kill(&self) -> Result<(), crate::Error>;
+    async fn dispatch_event(&self, id: Id, event: CreateEvent) -> Result<KhronosValue, crate::Error>;
+    fn dispatch_event_nowait(&self, id: Id, event: CreateEvent) -> Result<(), crate::Error>;
+    async fn drop_tenant(&self, id: Id) -> Result<(), crate::Error>;
+    fn len(&self) -> usize;
+}
+```
+
+Reference: src/worker/workerlike.rs:8-45
+
+### Core Methods
+
+<AccordionGroup>
+  <Accordion title="dispatch_event">
+    Dispatches an event to the appropriate Luau VM based on tenant ID. This is the primary method for event execution.
+    
+    ```rust
+    async fn dispatch_event(
+        &self, 
+        id: Id, 
+        event: CreateEvent
+    ) -> Result<KhronosValue, crate::Error>
+    ```
+    
+    **Workflow:**
+    1. Route to correct worker (if pool)
+    2. Check tenant state and event registration
+    3. Get or create VM for tenant
+    4. Execute template in Luau VM
+    5. Return result
+  </Accordion>
+  
+  <Accordion title="dispatch_event_nowait">
+    Fire-and-forget event dispatch that doesn't wait for completion. Useful for background tasks.
+    
+    ```rust
+    fn dispatch_event_nowait(
+        &self,
+        id: Id,
+        event: CreateEvent
+    ) -> Result<(), crate::Error>
+    ```
+  </Accordion>
+  
+  <Accordion title="run_script">
+    Executes arbitrary Luau code directly without going through the template system. Used by the Fauxpas staff API.
+    
+    ```rust
+    async fn run_script(
+        &self,
+        id: Id,
+        name: String,
+        code: String,
+        event: CreateEvent
+    ) -> Result<KhronosValue, crate::Error>
+    ```
+  </Accordion>
+  
+  <Accordion title="drop_tenant">
+    Removes a tenant's VM and cleans up resources. Marks the VM as broken to prevent further use.
+    
+    ```rust
+    async fn drop_tenant(
+        &self,
+        id: Id
+    ) -> Result<(), crate::Error>
+    ```
+    
+    Reference: src/worker/workervmmanager.rs:147-158
+  </Accordion>
+</AccordionGroup>
+
+## WorkerPool
+
+The `WorkerPool` aggregates multiple `WorkerLike` instances into a larger topology, distributing tenants using Discord's sharding formula.
+
+### Architecture
+
+```rust
+pub struct WorkerPool<T: WorkerLike> {
+    workers: Vec<T>,
+}
+```
+
+Reference: src/worker/workerpool.rs:27-30
+
+### Tenant Distribution
+
+The pool routes requests to workers deterministically:
+
+```rust
+pub fn get_worker_for(&self, id: Id) -> &T {
+    &self.workers[id.worker_id(self.workers.len())]
+}
+```
+
+Where `worker_id()` implements Discord's sharding formula:
+
+```rust
+pub fn worker_id(&self, num_workers: usize) -> usize {
+    match self {
+        Id::Guild(guild_id) => (guild_id.get() >> 22) as usize % num_workers,
+        Id::User(user_id) => (user_id.get() >> 22) as usize % num_workers,
+    }
+}
+```
+
+Reference: src/worker/workervmmanager.rs:68-78
+
+<Info>
+**Why >> 22?** Discord's snowflake IDs contain a timestamp in the upper bits. Right-shifting by 22 bits extracts the timestamp portion, distributing guilds created around the same time across different shards. This provides better load distribution than using the ID directly.
+</Info>
+
+### Poolable Trait
+
+For a WorkerLike to be poolable, it must implement the `Poolable` trait:
+
+```rust
+pub trait Poolable: WorkerLike + Send + Sync {
+    type ExtState: Send + Sync;
+    
+    fn new(id: usize, total: usize, ext_state: &Self::ExtState) -> Result<Self, crate::Error>
+    where Self: Sized;
+}
+```
+
+Reference: src/worker/workerpool.rs:13-20
+
+- `id`: The worker's position in the pool (0 to N-1)
+- `total`: Total number of workers in the pool
+- `ext_state`: External state needed to construct the worker
+
+## WorkerThread Topology
+
+WorkerThread provides a thread-based execution topology suitable for development and single-machine deployments.
+
+### Structure
+
+```rust
+pub struct WorkerThread {
+    tx: UnboundedSender<WorkerThreadMessage>,
+    id: usize,
+}
+```
+
+Reference: src/worker/workerthread.rs:41-46
+
+### Communication Protocol
+
+Messages are sent via tokio unbounded channels:
+
+```rust
+enum WorkerThreadMessage {
+    Kill { tx: OneShotSender<Result<(), crate::Error>> },
+    DropTenant { id: Id, tx: OneShotSender<Result<(), crate::Error>> },
+    RunScript { id: Id, name: String, code: String, event: CreateEvent, tx: OneShotSender<Result<KhronosValue, crate::Error>> },
+    DispatchEvent { id: Id, event: CreateEvent, tx: Option<OneShotSender<Result<KhronosValue, crate::Error>>> },
+}
+```
+
+Reference: src/worker/workerthread.rs:16-36
+
+### Thread Creation
+
+Each WorkerThread spawns a dedicated OS thread:
+
+```rust
+std::thread::Builder::new()
+    .name(format!("lua-vm-threadpool-{id}"))
+    .stack_size(MAX_VM_THREAD_STACK_SIZE)
+    .spawn(move || {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build_local(tokio::runtime::LocalOptions::default())
+            .expect("Failed to create tokio runtime");
+        
+        rt.block_on(async move {
+            let state = WorkerState::new(state, id).await.expect("Failed to create WorkerState");
+            let worker = Worker::new(state);
+            
+            // Message processing loop
+            while let Some(msg) = rx.recv().await {
+                // Handle messages...
+            }
+        });
+    })
+```
+
+Reference: src/worker/workerthread.rs:63-102
+
+<Warning>
+**Panic Handling**: If a WorkerThread panics, the entire process aborts (src/worker/workerthread.rs:104-107). This is intentional to prevent undefined behavior from a corrupted Luau VM state.
+</Warning>
+
+### Characteristics
+
+- **Lightweight**: No process spawning overhead
+- **Fast Communication**: Direct memory access via channels
+- **Development-Friendly**: Easier debugging and profiling
+- **Shared Process**: All workers in same process
+- **Panic Impact**: One worker panic can crash all workers
+
+## WorkerProcessHandle Topology
+
+WorkerProcessHandle provides process-based isolation for production deployments.
+
+### Structure
+
+```rust
+pub struct WorkerProcessHandle {
+    mesophyll_server: MesophyllServer,
+    id: usize,
+    total: usize,
+    kill_msg_tx: UnboundedSender<()>,
+}
+```
+
+Reference: src/worker/workerprocesshandle.rs:17-29
+
+### Process Management
+
+The master process spawns and manages worker processes:
+
+```rust
+let mut command = Command::new(current_exe);
+
+command.arg("--worker-type");
+command.arg("processpoolworker");
+command.arg("--worker-id");
+command.arg(self.id.to_string());
+command.arg("--process-workers");
+command.arg(self.total.to_string());
+command.env("MESOPHYLL_CLIENT_TOKEN", meso_token);
+command.kill_on_drop(true);
+
+let mut child = command.spawn()?;
+```
+
+Reference: src/worker/workerprocesshandle.rs:86-98
+
+### Fault Tolerance
+
+Worker processes automatically restart on failure:
+
+```rust
+const MAX_CONSECUTIVE_FAILURES_BEFORE_CRASH: usize = 10;
+
+let sleep_duration = Duration::from_secs(3 * std::cmp::min(failed_attempts, 5));
+
+if consecutive_failures >= Self::MAX_CONSECUTIVE_FAILURES_BEFORE_CRASH {
+    log::error!("Worker process has failed {} times in a row, crashing", consecutive_failures);
+    std::process::abort();
+}
+```
+
+Reference: src/worker/workerprocesshandle.rs:33, 63-70, 72
+
+### Communication
+
+Communication happens through the Mesophyll WebSocket protocol:
+
+```rust
+pub async fn dispatch_event(&self, id: Id, event: CreateEvent) -> Result<KhronosValue, crate::Error> {
+    let r = self.mesophyll_server.get_connection(self.id)
+        .ok_or_else(|| format!("No Mesophyll connection found for worker process with ID: {}", self.id))?;
+    r.dispatch_event(id, event).await
+}
+```
+
+Reference: src/worker/workerprocesshandle.rs:160-164
+
+### Characteristics
+
+- **Strong Isolation**: Worker crashes don't affect master or other workers
+- **Automatic Recovery**: Failed workers automatically restart
+- **Resource Management**: OS-level resource isolation
+- **Production-Ready**: Fault tolerance and stability
+- **Higher Overhead**: Process spawning and WebSocket communication
+
+## Worker Implementation
+
+The `Worker` struct is the core execution unit within each worker topology:
+
+```rust
+pub struct Worker {
+    pub vm_manager: WorkerVmManager,
+    pub dispatch: WorkerDispatch,
+}
+```
+
+Reference: src/worker/worker.rs:8-13
+
+It encapsulates:
+- **WorkerVmManager**: Creates and manages Luau VMs per tenant
+- **WorkerDispatch**: Handles event dispatching and startup events
+
+### Initialization
+
+```rust
+impl Worker {
+    pub fn new(state: WorkerState) -> Self {        
+        let vm_manager = WorkerVmManager::new(state.clone());
+        let dispatch = WorkerDispatch::new(vm_manager.clone());
+        
+        Self { vm_manager, dispatch }
+    }
+}
+```
+
+Reference: src/worker/worker.rs:16-29
+
+On creation, WorkerDispatch automatically fires startup events to all tenants registered for `OnStartup` (src/worker/workerdispatch.rs:27-46).
+
+## Tenant ID System
+
+The `Id` enum represents tenant identity:
+
+```rust
+#[derive(Debug, Clone, Copy, Hash, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", content = "id")]
+pub enum Id {
+    Guild(GuildId),
+    User(UserId),
+}
+```
+
+Reference: src/worker/workervmmanager.rs:18-22
+
+This design supports:
+- Guild-level templates (traditional AntiRaid use case)
+- User-level templates (user-installed apps)
+- Future expansion for other tenant types
+
+## Comparison Matrix
+
+| Feature | WorkerThread | WorkerProcessHandle |
+|---------|--------------|--------------------|
+| **Isolation** | Thread-level | Process-level |
+| **Communication** | tokio mpsc | Mesophyll WebSocket |
+| **Startup Time** | Fast | Slower |
+| **Memory Overhead** | Low | Higher |
+| **Fault Tolerance** | Process abort on panic | Worker restart on crash |
+| **Best For** | Development, testing | Production, high reliability |
+| **Resource Limits** | Shared with master | OS-enforced per process |
+
+## Usage Examples
+
+### Creating a Thread Pool
+
+```rust
+let worker_state = CreateWorkerState::new(
+    http.clone(),
+    reqwest.clone(),
+    object_storage.clone(),
+    Arc::new(current_user.clone()),
+    Arc::new(WorkerDB::new_direct(db_state.clone())),
+    sandwich.clone(),
+    worker_debug
+);
+
+let worker_pool = Arc::new(
+    WorkerPool::<WorkerThread>::new(shards, &worker_state)
+        .expect("Failed to create worker thread pool")
+);
+```
+
+Reference: src/main.rs:277-294
+
+### Creating a Process Pool
+
+```rust
+let mesophyll_server = MesophyllServer::new(
+    CONFIG.addrs.mesophyll_server.clone(),
+    shards,
+    pg_pool.clone()
+).await?;
+
+let worker_pool = Arc::new(
+    WorkerPool::<WorkerProcessHandle>::new(
+        shards,
+        &WorkerProcessHandleCreateOpts::new(mesophyll_server),
+    ).expect("Failed to create worker thread pool")
+);
+```
+
+Reference: src/main.rs:352-367
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Mesophyll" href="/architecture/mesophyll" icon="network-wired">
+    Learn about worker coordination
+  </Card>
+  
+  <Card title="Components" href="/architecture/components" icon="cubes">
+    Explore individual components
+  </Card>
+</CardGroup>

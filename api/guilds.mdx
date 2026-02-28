@@ -1,0 +1,278 @@
+---
+title: Guilds
+description: Access guild information, channels, roles, and permissions
+---
+
+The Guilds API provides endpoints to retrieve information about Discord servers (guilds) where the bot is installed, including channels, roles, and user permissions.
+
+## Get User Guilds
+
+Retrieve a list of all guilds the authenticated user has access to, along with information about which guilds have the bot installed.
+
+**Endpoint:** `GET /users/@me/guilds`
+
+```bash Get User Guilds
+curl -X GET "https://splashtail-staging.antiraid.xyz/users/@me/guilds?refresh=false" \
+  -H "Authorization: YOUR_TOKEN"
+```
+
+<ParamField query="refresh" type="boolean" default="false">
+  Whether to refresh the guild cache from Discord. If false, uses cached data if available.
+</ParamField>
+
+<Note>
+  This endpoint currently requires a `login` or `app_login` session type (OAuth2). API tokens are not supported for this endpoint.
+</Note>
+
+<ResponseExample>
+```json User Guilds Response
+{
+  "guilds": [
+    {
+      "id": "123456789012345678",
+      "name": "My Discord Server",
+      "icon": "a_1234567890abcdef",
+      "permissions": "2147483647",
+      "owner": true
+    },
+    {
+      "id": "987654321098765432",
+      "name": "Another Server",
+      "icon": null,
+      "permissions": "104189504",
+      "owner": false
+    }
+  ],
+  "bot_in_guilds": [
+    "123456789012345678"
+  ]
+}
+```
+</ResponseExample>
+
+<ResponseField name="guilds" type="array">
+  List of all guilds the user has access to
+  
+  <Expandable title="guild properties">
+    <ResponseField name="id" type="string">
+      The guild's Discord ID
+    </ResponseField>
+    
+    <ResponseField name="name" type="string">
+      The guild's name
+    </ResponseField>
+    
+    <ResponseField name="icon" type="string | null">
+      The guild's icon hash (null if no icon)
+    </ResponseField>
+    
+    <ResponseField name="permissions" type="string">
+      The user's permissions in the guild (as a bitfield string)
+    </ResponseField>
+    
+    <ResponseField name="owner" type="boolean">
+      Whether the user is the guild owner
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="bot_in_guilds" type="array">
+  Array of guild IDs where the bot is currently installed
+</ResponseField>
+
+## Get Guild User Info
+
+Retrieve detailed information about a specific guild, including the user's permissions, channels, and roles.
+
+**Endpoint:** `GET /users/@me/guilds/{guild_id}`
+
+```bash Get Guild Info
+curl -X GET https://splashtail-staging.antiraid.xyz/users/@me/guilds/123456789012345678 \
+  -H "Authorization: YOUR_TOKEN"
+```
+
+<ParamField path="guild_id" type="string" required>
+  The Discord ID of the guild to retrieve information for
+</ParamField>
+
+<ResponseExample>
+```json Guild Info Response
+{
+  "owner_id": "123456789012345678",
+  "name": "My Discord Server",
+  "icon": "https://cdn.discordapp.com/icons/123456789012345678/a_1234567890abcdef.png",
+  "roles": [
+    {
+      "id": "123456789012345678",
+      "name": "@everyone",
+      "position": 0,
+      "permissions": "104324097"
+    },
+    {
+      "id": "987654321098765432",
+      "name": "Admin",
+      "position": 10,
+      "permissions": "8"
+    }
+  ],
+  "user_roles": [
+    "987654321098765432"
+  ],
+  "bot_roles": [
+    "555555555555555555"
+  ],
+  "channels": [
+    {
+      "user": "1024",
+      "bot": "3072",
+      "channel": {
+        "id": "111111111111111111",
+        "name": "general",
+        "position": 0,
+        "parent_id": null,
+        "type": 0
+      }
+    },
+    {
+      "user": "1024",
+      "bot": "3072",
+      "channel": {
+        "id": "222222222222222222",
+        "name": "announcements",
+        "position": 1,
+        "parent_id": null,
+        "type": 0
+      }
+    }
+  ]
+}
+```
+</ResponseExample>
+
+<ResponseField name="owner_id" type="string">
+  The Discord user ID of the guild owner
+</ResponseField>
+
+<ResponseField name="name" type="string">
+  The guild's name
+</ResponseField>
+
+<ResponseField name="icon" type="string | null">
+  Full URL to the guild's icon (or null if no icon)
+</ResponseField>
+
+<ResponseField name="roles" type="array">
+  All roles in the guild
+  
+  <Expandable title="role properties">
+    <ResponseField name="id" type="string">
+      The role's Discord ID
+    </ResponseField>
+    
+    <ResponseField name="name" type="string">
+      The role's name
+    </ResponseField>
+    
+    <ResponseField name="position" type="integer">
+      The role's position in the hierarchy (higher = more important)
+    </ResponseField>
+    
+    <ResponseField name="permissions" type="string">
+      The role's permissions as a bitfield string
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="user_roles" type="array">
+  Array of role IDs that the authenticated user has in this guild
+</ResponseField>
+
+<ResponseField name="bot_roles" type="array">
+  Array of role IDs that the bot has in this guild
+</ResponseField>
+
+<ResponseField name="channels" type="array">
+  All channels in the guild with permission information
+  
+  <Expandable title="channel properties">
+    <ResponseField name="user" type="string">
+      The user's permissions in this channel (as a bitfield string)
+    </ResponseField>
+    
+    <ResponseField name="bot" type="string">
+      The bot's permissions in this channel (as a bitfield string)
+    </ResponseField>
+    
+    <ResponseField name="channel" type="object">
+      Channel information
+      
+      <Expandable title="channel object">
+        <ResponseField name="id" type="string">
+          The channel's Discord ID
+        </ResponseField>
+        
+        <ResponseField name="name" type="string">
+          The channel's name
+        </ResponseField>
+        
+        <ResponseField name="position" type="integer">
+          The channel's position in the list
+        </ResponseField>
+        
+        <ResponseField name="parent_id" type="string | null">
+          The parent category ID (null if no parent)
+        </ResponseField>
+        
+        <ResponseField name="type" type="integer">
+          The Discord channel type (0 = text, 2 = voice, 4 = category, etc.)
+        </ResponseField>
+      </Expandable>
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+## Permission Calculations
+
+Permissions are returned as bitfield strings. Here are some common Discord permission values:
+
+| Permission | Value |
+|------------|-------|
+| View Channel | 1024 |
+| Send Messages | 2048 |
+| Manage Messages | 8192 |
+| Manage Channels | 16 |
+| Administrator | 8 |
+
+For a complete list of Discord permissions, see the [Discord API documentation](https://discord.com/developers/docs/topics/permissions).
+
+## Error Responses
+
+<ResponseExample>
+```json Guild Not Found
+{
+  "message": "Guild to get settings for does not have the bot?",
+  "code": "NotFound"
+}
+```
+
+```json User Not In Guild
+{
+  "message": "User not found in server",
+  "code": "NotFound"
+}
+```
+</ResponseExample>
+
+## Use Cases
+
+The Guilds API is useful for:
+
+- Building guild selection interfaces
+- Checking if the bot is installed in a guild
+- Displaying available channels for configuration
+- Validating user permissions before allowing actions
+- Creating role-based access controls
+
+<Tip>
+  Guild data is cached to improve performance. Use the `refresh=true` parameter on the `/users/@me/guilds` endpoint to force a refresh from Discord.
+</Tip>
